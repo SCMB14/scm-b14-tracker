@@ -812,6 +812,28 @@
   .cloud-dot.error{background:#ef4444}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
 
+  /* ROLE LOGIN */
+  .role-btn{
+    display:flex;flex-direction:column;align-items:center;gap:4px;
+    padding:20px 12px;border-radius:8px;border:1px solid var(--border);
+    background:var(--panel-2);color:var(--text);cursor:pointer;
+    transition:border-color .15s,background .15s;
+  }
+  .role-btn:hover{border-color:var(--accent);background:var(--panel)}
+  .role-badge{
+    display:flex;align-items:center;gap:6px;padding:5px 10px;border-radius:14px;
+    background:var(--panel-2);border:1px solid var(--border);font-size:11px;
+    font-family:var(--font-mono);color:var(--text);
+  }
+  .role-badge.cdt{border-color:#a855f7;color:#c084fc}
+  .role-badge.nt{border-color:#22c55e;color:#4ade80}
+  .role-badge .logout-x{
+    margin-left:4px;width:16px;height:16px;border-radius:50%;background:transparent;
+    border:1px solid currentColor;cursor:pointer;font-size:10px;line-height:1;
+    color:inherit;
+  }
+  .role-badge .logout-x:hover{background:var(--red);color:#fff;border-color:var(--red)}
+
   /* MODAL + DASHBOARD */
   .modal-overlay{
     display:none;position:fixed;inset:0;z-index:200;
@@ -1098,7 +1120,7 @@
 <header>
   <div class="logo">SCM<span>·B14</span> PROGRESS</div>
   <div class="subtitle">Multi-Task<br>Construction Tracker</div>
-  <div style="font-size:11px;color:#000;background:var(--green);padding:3px 10px;border-radius:12px;font-weight:700;font-family:var(--font-mono)">v14 · ONLINE</div>
+  <div style="font-size:11px;color:#000;background:var(--green);padding:3px 10px;border-radius:12px;font-weight:700;font-family:var(--font-mono)">v15 · CDT/NT</div>
   <div class="toolbar">
     <button class="btn" id="loadImageBtn" title="Load floor plan (image or PDF) for the current floor">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg>
@@ -1141,12 +1163,45 @@
       <span class="cloud-dot" id="cloudDot"></span>
       <span id="cloudText">Offline</span>
     </div>
+    <div class="role-badge" id="roleBadge" style="display:none">
+      <span id="roleBadgeIcon">🏗</span><span id="roleBadgeText">NT</span>
+      <button class="logout-x" id="logoutBtn" title="Đổi vai trò / đăng xuất">✕</button>
+    </div>
     <button class="btn" id="cloudPushBtn" title="Upload the current state to the cloud (overwrites cloud copy)">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 16l-4-4-4 4"/><path d="M12 12v9"/><path d="M20.4 14.5A4 4 0 0 0 17 8h-1.3A8 8 0 1 0 4 16.3"/></svg>
       Push to Cloud
     </button>
   </div>
 </header>
+
+<!-- ROLE LOGIN MODAL (shown on startup) -->
+<div class="modal-overlay" id="loginModal" style="z-index:300">
+  <div class="modal" style="width:min(440px,92vw)">
+    <div class="modal-header">
+      <h2>Đăng nhập</h2>
+    </div>
+    <div class="modal-body" style="padding:24px">
+      <div style="font-size:13px;color:var(--muted);margin-bottom:18px">Chọn vai trò của bạn để vào hệ thống tiến độ SCM-B14:</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
+        <button class="role-btn" id="roleNTBtn">
+          <div style="font-size:24px">🏗</div>
+          <div style="font-weight:600">Nhà thầu</div>
+          <div style="font-size:11px;color:var(--muted);margin-top:2px">Xem &amp; nhập Plan của NT</div>
+        </button>
+        <button class="role-btn" id="roleCDTBtn">
+          <div style="font-size:24px">🏢</div>
+          <div style="font-weight:600">Chủ đầu tư</div>
+          <div style="font-size:11px;color:var(--muted);margin-top:2px">Cần password</div>
+        </button>
+      </div>
+      <div id="roleCDTPwdBox" style="display:none">
+        <input type="password" id="roleCDTPwd" placeholder="Nhập password CĐT" style="width:100%;padding:10px;background:var(--panel-2);border:1px solid var(--border);color:var(--text);border-radius:6px;font-size:13px">
+        <div id="roleCDTPwdErr" style="color:var(--red);font-size:11px;margin-top:6px;display:none">Sai password.</div>
+        <button class="btn" id="roleCDTSubmit" style="margin-top:10px;width:100%">Vào CĐT</button>
+      </div>
+    </div>
+  </div>
+</div>
 
 <!-- DASHBOARD MODAL -->
 <div class="modal-overlay" id="dashboardModal">
@@ -1455,15 +1510,15 @@ function calcTradeVariance(task){
   const today = STATE.today;
   const pct = Number(task.percentActual) || 0;
   if(task.actualEnd && pct >= 100){
-    return task.planEnd ? diffDays(task.actualEnd, task.planEnd) : null;
+    return taskPlanEnd(task) ? diffDays(task.actualEnd, taskPlanEnd(task)) : null;
   }
-  if(!task.planEnd) return null;
-  if(diffDays(today, task.planEnd) > 0 && pct < 100){
-    return diffDays(today, task.planEnd);   // overrun in days
+  if(!taskPlanEnd(task)) return null;
+  if(diffDays(today, taskPlanEnd(task)) > 0 && pct < 100){
+    return diffDays(today, taskPlanEnd(task));   // overrun in days
   }
   // ongoing, within plan window: estimate via plan-vs-actual %
-  if(task.planStart && task.planEnd){
-    const planSpan = Math.max(1, diffDays(task.planEnd, task.planStart));
+  if(taskPlanStart(task) && taskPlanEnd(task)){
+    const planSpan = Math.max(1, diffDays(taskPlanEnd(task), taskPlanStart(task)));
     const planPct = calcPlanPercent(task);
     const gap = planPct - pct;   // positive → behind
     if(gap >= 10) return Math.round(planSpan * gap / 100);
@@ -1566,16 +1621,16 @@ function forecastFinishForTrade(area, taskKey){
   const td = area.tasks[taskKey];
   if(!td || td.na) return null;
   const now = Number(td.percentActual)||0;
-  if(now >= 100) return td.actualEnd || td.planEnd || null;
-  if(STATE.snapshots.length === 0) return td.planEnd || null;
+  if(now >= 100) return td.actualEnd || taskPlanEnd(td) || null;
+  if(STATE.snapshots.length === 0) return taskPlanEnd(td) || null;
   // use earliest snapshot in last 4 weeks for stability
   const fourWeeksAgo = dayMs(STATE.today) - 28*86400000;
   const recent = STATE.snapshots.filter(s => dayMs(s.date) >= fourWeeksAgo);
   const base = recent.length ? recent[0] : STATE.snapshots[0];
   const baseFloor = base.data[ (STATE.floors.find(f => f.areas.includes(area))||{}).id ];
-  if(!baseFloor || !baseFloor[area.id]) return td.planEnd || null;
+  if(!baseFloor || !baseFloor[area.id]) return taskPlanEnd(td) || null;
   const then = baseFloor[area.id][taskKey];
-  if(then === null || then === undefined) return td.planEnd || null;
+  if(then === null || then === undefined) return taskPlanEnd(td) || null;
   const elapsed = Math.max(1, diffDays(STATE.today, base.date));
   const gain = now - then;
   if(gain <= 0) return null;   // no progress, can't forecast
@@ -1740,7 +1795,7 @@ function renderDashboard(){
         <td class="floor-name">${it.area.name}</td>
         <td><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${it.trade.color};margin-right:6px"></span>${it.trade.name}</td>
         <td style="color:#ef4444;font-weight:700">+${it.days} d</td>
-        <td>${td.planEnd || '—'}</td>
+        <td>${taskPlanEnd(td) || '—'}</td>
         <td>${Math.round(Number(td.percentActual)||0)}%</td>
       </tr>`;
     });
@@ -1891,7 +1946,7 @@ function exportDashboardExcel(){
       issues.push({
         Floor: f.name, Area: a.name, Trade: dl.trade.name,
         'Days late': dl.days,
-        'Plan End': td.planEnd || '',
+        'Plan End': taskPlanEnd(td) || '',
         'Actual %': Math.round(Number(td.percentActual)||0),
       });
     }
@@ -2055,7 +2110,7 @@ function exportDashboardPDF(){
       doc.setTextColor(200,0,0);
       doc.text('+' + it.days + ' d', 150, y);
       doc.setTextColor(0);
-      doc.text(td.planEnd || '—', 170, y);
+      doc.text(taskPlanEnd(td) || '—', 170, y);
       y += 5;
     });
   }
@@ -2334,8 +2389,12 @@ const DEFAULT_IMG = "data:image/png;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/4gHYSUNDX
 function makeEmptyTask(){
   return {
     na:false,  // true = trade not applicable to this area
-    planStart:'', planEnd:'',
-    planStartHistory:[], planEndHistory:[],  // previous (revised-out) values, oldest first
+    // Plan dates: separate for Owner (CDT, with buffer) and Contractor (NT, internal)
+    planStartCDT:'', planEndCDT:'',
+    planStartNT:'',  planEndNT:'',
+    planStartCDTHistory:[], planEndCDTHistory:[],
+    planStartNTHistory:[],  planEndNTHistory:[],
+    // Actual: shared between roles
     actualStart:'', actualEnd:'',
     percentActual:0
   };
@@ -2345,12 +2404,82 @@ function ensureAreaTasks(a){
   TASKS.forEach(t => {
     if(!a.tasks[t.key]) a.tasks[t.key] = makeEmptyTask();
     const td = a.tasks[t.key];
-    if(!Array.isArray(td.planStartHistory)) td.planStartHistory = [];
-    if(!Array.isArray(td.planEndHistory)) td.planEndHistory = [];
+    // Migrate legacy single-plan fields into BOTH CDT and NT (start equal initially).
+    if(td.planStart !== undefined || td.planEnd !== undefined){
+      if(!td.planStartCDT) td.planStartCDT = td.planStart || '';
+      if(!td.planEndCDT)   td.planEndCDT   = td.planEnd   || '';
+      if(!td.planStartNT)  td.planStartNT  = td.planStart || '';
+      if(!td.planEndNT)    td.planEndNT    = td.planEnd   || '';
+      delete td.planStart; delete td.planEnd;
+    }
+    if(Array.isArray(td.planStartHistory) && !td.planStartCDTHistory){
+      td.planStartCDTHistory = td.planStartHistory.slice();
+      td.planStartNTHistory  = td.planStartHistory.slice();
+      delete td.planStartHistory;
+    }
+    if(Array.isArray(td.planEndHistory) && !td.planEndCDTHistory){
+      td.planEndCDTHistory = td.planEndHistory.slice();
+      td.planEndNTHistory  = td.planEndHistory.slice();
+      delete td.planEndHistory;
+    }
+    // Ensure all 4 history arrays exist
+    if(!Array.isArray(td.planStartCDTHistory)) td.planStartCDTHistory = [];
+    if(!Array.isArray(td.planEndCDTHistory))   td.planEndCDTHistory = [];
+    if(!Array.isArray(td.planStartNTHistory))  td.planStartNTHistory = [];
+    if(!Array.isArray(td.planEndNTHistory))    td.planEndNTHistory = [];
+    // Ensure all 4 plan fields exist
+    if(td.planStartCDT === undefined) td.planStartCDT = '';
+    if(td.planEndCDT   === undefined) td.planEndCDT = '';
+    if(td.planStartNT  === undefined) td.planStartNT = '';
+    if(td.planEndNT    === undefined) td.planEndNT = '';
     if(td.na === undefined) td.na = false;
   });
   // per-area label position offset (for drag-to-move). null = auto position.
   if(a.labelOffset === undefined) a.labelOffset = null;
+}
+
+/* ===== ROLE / PERSPECTIVE ===== */
+const SCM_CDT_PASSWORD = "ScmB14";   // ← bạn đổi chuỗi này thành password CDT của bạn
+const ROLE = {
+  current: null,     // 'cdt' or 'nt'
+  isCDT(){ return this.current === 'cdt'; },
+  isNT(){ return this.current === 'nt'; },
+};
+
+// Which plan fields the current view should read/write
+function planFields(){
+  if(ROLE.isCDT()){
+    return {
+      start:'planStartCDT', end:'planEndCDT',
+      startHist:'planStartCDTHistory', endHist:'planEndCDTHistory',
+      label:'CĐT', // shown in UI
+    };
+  }
+  return {
+    start:'planStartNT', end:'planEndNT',
+    startHist:'planStartNTHistory', endHist:'planEndNTHistory',
+    label:'NT',
+  };
+}
+
+// Read the ACTIVE plan dates (depends on current role).
+// These accept either a task object or a value; if undefined return ''.
+function taskPlanStart(td){ if(!td) return ''; return td[planFields().start] || ''; }
+function taskPlanEnd(td){   if(!td) return ''; return td[planFields().end]   || ''; }
+function taskPlanStartHist(td){ if(!td) return []; return td[planFields().startHist] || []; }
+function taskPlanEndHist(td){   if(!td) return []; return td[planFields().endHist]   || []; }
+// Set with revision history bookkeeping
+function setTaskPlanStart(td, val){
+  const f = planFields();
+  const old = td[f.start] || '';
+  if(old && old !== val) (td[f.startHist] = td[f.startHist] || []).push(old);
+  td[f.start] = val;
+}
+function setTaskPlanEnd(td, val){
+  const f = planFields();
+  const old = td[f.end] || '';
+  if(old && old !== val) (td[f.endHist] = td[f.endHist] || []).push(old);
+  td[f.end] = val;
 }
 
 /* =============================================================
@@ -2586,7 +2715,11 @@ function setupAreaListDelegation(){
     if(f === 'percentActual'){
       v = v === '' ? '' : Math.max(0, Math.min(100, Number(v)));
       td.percentActual = v === '' ? 0 : v;
-    } else if(f === 'planStart' || f === 'planEnd' || f === 'actualStart' || f === 'actualEnd'){
+    } else if(f === 'planStart'){
+      td[planFields().start] = v;
+    } else if(f === 'planEnd'){
+      td[planFields().end] = v;
+    } else if(f === 'actualStart' || f === 'actualEnd'){
       td[f] = v;
     }
     // live update canvas + computed bits, but DON'T rebuild the inputs
@@ -2618,7 +2751,8 @@ function setupAreaListDelegation(){
     const prev = inp.dataset.prevValue || '';
     const now = inp.value;
     if(prev && prev !== now){
-      td[f + 'History'].push(prev);
+      const histKey = (f === 'planStart') ? planFields().startHist : planFields().endHist;
+      (td[histKey] = td[histKey] || []).push(prev);
       // refresh the revisions box (full sidebar rebuild is fine on commit)
       const card = inp.closest('.area-card');
       const revBox = card.querySelector('.revisions-box');
@@ -3148,12 +3282,12 @@ function daysBetween(d1, d2){
   return Math.round((b - a) / 86400000);
 }
 function calcPlanPercent(task){
-  if(!task.planStart || !task.planEnd) return 0;
-  const total = daysBetween(task.planStart, task.planEnd);
+  if(!taskPlanStart(task) || !taskPlanEnd(task)) return 0;
+  const total = daysBetween(taskPlanStart(task), taskPlanEnd(task));
   if(total <= 0){
-    return new Date(STATE.today) >= new Date(task.planEnd) ? 100 : 0;
+    return new Date(STATE.today) >= new Date(taskPlanEnd(task)) ? 100 : 0;
   }
-  const passed = daysBetween(task.planStart, STATE.today);
+  const passed = daysBetween(taskPlanStart(task), STATE.today);
   return Math.max(0, Math.min(100, (passed / total) * 100));
 }
 function calcTaskStatus(task){
@@ -3162,11 +3296,11 @@ function calcTaskStatus(task){
   const actualPct = Number(task.percentActual) || 0;
 
   if(actualPct >= 100) return {status:'done', label:'Done', color:'#3b82f6'};
-  if(!task.planStart && !task.planEnd && actualPct === 0)
+  if(!taskPlanStart(task) && !taskPlanEnd(task) && actualPct === 0)
     return {status:'notstarted', label:'Not Started', color:'#8b95a3'};
 
   const todayD = new Date(STATE.today);
-  const endD = task.planEnd ? new Date(task.planEnd) : null;
+  const endD = taskPlanEnd(task) ? new Date(taskPlanEnd(task)) : null;
   if(endD && todayD > endD && actualPct < 100)
     return {status:'overdue', label:'Overdue', color:'#ef4444'};
 
@@ -3517,7 +3651,7 @@ function renderExternalLabel(area, statusColor){
 
       // dates + pct (dark gray)
       const parts = [];
-      if(STATE.toggles.showDates) parts.push(`${fmtDate(taskData.planStart)}→${fmtDate(taskData.planEnd)}`);
+      if(STATE.toggles.showDates) parts.push(`${fmtDate(taskPlanStart(taskData))}→${fmtDate(taskPlanEnd(taskData))}`);
       if(STATE.toggles.showPct) parts.push(`P${planPct}% A${actPct}%`);
       const info = mkText(labelX + 38, yCursor, 'start');
       info.style.fontSize = '8.5px';
@@ -3544,8 +3678,8 @@ function renderExternalLabel(area, statusColor){
       const t = mkText(cx, yCursor);
       t.style.fontSize = '9.5px';
       t.setAttribute('fill', '#111111');
-      const s = taskData.planStart && taskData.planEnd
-        ? `Plan: ${fmtDate(taskData.planStart)} → ${fmtDate(taskData.planEnd)}`
+      const s = taskPlanStart(taskData) && taskPlanEnd(taskData)
+        ? `Plan: ${fmtDate(taskPlanStart(taskData))} → ${fmtDate(taskPlanEnd(taskData))}`
         : 'Plan: —';
       t.textContent = s;
       g.appendChild(t);
@@ -3612,7 +3746,7 @@ function updateTaskCounts(){
     const count = STATE.areas.filter(a => {
       ensureAreaTasks(a);
       const td = a.tasks[t.key];
-      return td.planStart || td.planEnd || td.actualStart || td.actualEnd || Number(td.percentActual) > 0;
+      return taskPlanStart(td) || taskPlanEnd(td) || td.actualStart || td.actualEnd || Number(td.percentActual) > 0;
     }).length;
     $('taskCount_' + t.key).textContent = count;
   });
@@ -3647,7 +3781,7 @@ function showTooltip(e, area){
           <span>${taskDef.name}</span>
           <span style="margin-left:auto;color:${ts.color};font-size:10px">${ts.label}</span>
         </div>
-        <div class="row"><span>Plan:</span><span>${fmtDate(td.planStart)} → ${fmtDate(td.planEnd)}</span></div>
+        <div class="row"><span>Plan:</span><span>${fmtDate(taskPlanStart(td))} → ${fmtDate(taskPlanEnd(td))}</span></div>
         <div class="row"><span>Actual:</span><span>${fmtDate(td.actualStart)} → ${fmtDate(td.actualEnd)}</span></div>
         <div class="row"><span>Plan%/Act%:</span><span>${Math.round(calcPlanPercent(td))}% / ${Math.round(Number(td.percentActual)||0)}%</span></div>
       </div>`;
@@ -3735,18 +3869,18 @@ function planStartFor(a){
   ensureAreaTasks(a);
   if(STATE.currentTask === '__all__'){
     // earliest plan start among all tasks
-    const ds = TASKS.map(t => a.tasks[t.key].planStart).filter(Boolean).sort();
+    const ds = TASKS.map(t => taskPlanStart(a.tasks[t.key])).filter(Boolean).sort();
     return ds[0] || '';
   }
-  return a.tasks[STATE.currentTask].planStart || '';
+  return taskPlanStart(a.tasks[STATE.currentTask]) || '';
 }
 function planEndFor(a){
   ensureAreaTasks(a);
   if(STATE.currentTask === '__all__'){
-    const ds = TASKS.map(t => a.tasks[t.key].planEnd).filter(Boolean).sort();
+    const ds = TASKS.map(t => taskPlanEnd(a.tasks[t.key])).filter(Boolean).sort();
     return ds[ds.length-1] || '';
   }
-  return a.tasks[STATE.currentTask].planEnd || '';
+  return taskPlanEnd(a.tasks[STATE.currentTask]) || '';
 }
 function actualFor(a){
   ensureAreaTasks(a);
@@ -3783,19 +3917,21 @@ function renderSidebar(){
 }
 
 function buildRevisionsHtml(td){
+  const startH = taskPlanStartHist(td);
+  const endH = taskPlanEndHist(td);
   let html = '';
-  if(td.planStartHistory.length || td.planEndHistory.length){
-    html += '<div class="rev-title">Plan revisions <span style="opacity:.6">(old crossed out)</span></div>';
-    if(td.planStartHistory.length){
+  if(startH.length || endH.length){
+    html += `<div class="rev-title">Plan revisions <span style="opacity:.6">(${planFields().label} — old crossed out)</span></div>`;
+    if(startH.length){
       html += '<div class="rev-line"><span class="rev-lbl">Start:</span> ';
-      html += td.planStartHistory.map(d => `<s>${fmtDate(d)}</s>`).join(' → ');
-      html += ` → <b>${fmtDate(td.planStart)}</b>`;
+      html += startH.map(d => `<s>${fmtDate(d)}</s>`).join(' → ');
+      html += ` → <b>${fmtDate(taskPlanStart(td))}</b>`;
       html += ` <button class="rev-clear" data-clearhist="planStart" title="Clear start history">×</button></div>`;
     }
-    if(td.planEndHistory.length){
+    if(endH.length){
       html += '<div class="rev-line"><span class="rev-lbl">End:</span> ';
-      html += td.planEndHistory.map(d => `<s>${fmtDate(d)}</s>`).join(' → ');
-      html += ` → <b>${fmtDate(td.planEnd)}</b>`;
+      html += endH.map(d => `<s>${fmtDate(d)}</s>`).join(' → ');
+      html += ` → <b>${fmtDate(taskPlanEnd(td))}</b>`;
       html += ` <button class="rev-clear" data-clearhist="planEnd" title="Clear end history">×</button></div>`;
     }
   }
@@ -3898,11 +4034,11 @@ function renderAreaCard(area){
       <div class="area-dates">
         <div class="date-field">
           <label>Plan Start</label>
-          <input type="date" data-field="planStart" value="${td.planStart||''}">
+          <input type="date" data-field="planStart" value="${taskPlanStart(td)||''}">
         </div>
         <div class="date-field">
           <label>Plan End</label>
-          <input type="date" data-field="planEnd" value="${td.planEnd||''}">
+          <input type="date" data-field="planEnd" value="${taskPlanEnd(td)||''}">
         </div>
         <div class="date-field">
           <label>Actual Start</label>
@@ -4000,11 +4136,11 @@ function renderDetailPanel(){
       <div class="detail-grid-2">
         <div class="detail-field">
           <label>Plan Start</label>
-          <input type="date" data-dfield="planStart" value="${td.planStart||''}">
+          <input type="date" data-dfield="planStart" value="${taskPlanStart(td)||''}">
         </div>
         <div class="detail-field">
           <label>Plan End</label>
-          <input type="date" data-dfield="planEnd" value="${td.planEnd||''}">
+          <input type="date" data-dfield="planEnd" value="${taskPlanEnd(td)||''}">
         </div>
       </div>
       <div class="detail-revisions" id="detailRevisions">${buildRevisionsHtml(td)}</div>
@@ -4066,6 +4202,10 @@ function wireDetailInputs(area){
       if(f === 'percentActual'){
         let v = inp.value === '' ? 0 : Math.max(0, Math.min(100, Number(inp.value)));
         td.percentActual = v;
+      } else if(f === 'planStart'){
+        td[planFields().start] = inp.value;
+      } else if(f === 'planEnd'){
+        td[planFields().end] = inp.value;
       } else {
         td[f] = inp.value;
       }
@@ -4085,7 +4225,8 @@ function wireDetailInputs(area){
         const prev = inp.dataset.prev || '';
         const now = inp.value;
         if(prev && prev !== now){
-          td[f + 'History'].push(prev);
+          const histKey = (f === 'planStart') ? planFields().startHist : planFields().endHist;
+          (td[histKey] = td[histKey] || []).push(prev);
           const rev = $('detailRevisions');
           if(rev) rev.innerHTML = buildRevisionsHtml(td);
         }
@@ -4100,7 +4241,9 @@ function wireDetailInputs(area){
     btn.addEventListener('click', e => {
       e.stopPropagation();
       const td = area.tasks[STATE.detailTab];
-      td[btn.dataset.clearhist + 'History'] = [];
+      const which = btn.dataset.clearhist; // 'planStart' or 'planEnd'
+      const histKey = (which === 'planStart') ? planFields().startHist : planFields().endHist;
+      td[histKey] = [];
       renderDetailPanel();
       renderCanvasOnly();
     });
@@ -4193,8 +4336,8 @@ function exportExcel(){
     TASKS.forEach(t => {
       const td = a.tasks[t.key];
       row[`${t.short} N/A`] = td.na ? 'YES' : '';
-      row[`${t.short} Plan Start`] = td.planStart || '';
-      row[`${t.short} Plan End`] = td.planEnd || '';
+      row[`${t.short} Plan Start`] = taskPlanStart(td) || '';
+      row[`${t.short} Plan End`] = taskPlanEnd(td) || '';
       row[`${t.short} Actual Start`] = td.actualStart || '';
       row[`${t.short} Actual End`] = td.actualEnd || '';
       row[`${t.short} Plan %`] = Math.round(calcPlanPercent(td));
@@ -4218,8 +4361,8 @@ function exportExcel(){
         'Area ID': a.id,
         'Area Name': a.name,
         'N/A': td.na ? 'YES' : '',
-        'Plan Start': td.planStart || '',
-        'Plan End': td.planEnd || '',
+        'Plan Start': taskPlanStart(td) || '',
+        'Plan End': taskPlanEnd(td) || '',
         'Actual Start': td.actualStart || '',
         'Actual End': td.actualEnd || '',
         'Plan % (auto)': Math.round(calcPlanPercent(td)),
@@ -4265,8 +4408,8 @@ function importExcel(e){
           ensureAreaTasks(area);
           const td = area.tasks[t.key];
           if(row['N/A'] !== undefined) td.na = /^(yes|y|true|1|na|n\/a)$/i.test(String(row['N/A']).trim());
-          if(row['Plan Start']) td.planStart = normalizeDate(row['Plan Start']);
-          if(row['Plan End']) td.planEnd = normalizeDate(row['Plan End']);
+          if(row['Plan Start']) taskPlanStart(td) = normalizeDate(row['Plan Start']);
+          if(row['Plan End']) taskPlanEnd(td) = normalizeDate(row['Plan End']);
           if(row['Actual Start']) td.actualStart = normalizeDate(row['Actual Start']);
           if(row['Actual End']) td.actualEnd = normalizeDate(row['Actual End']);
           if(row['Actual % (manual)'] !== undefined && row['Actual % (manual)'] !== '')
@@ -4288,8 +4431,8 @@ function importExcel(e){
           TASKS.forEach(t => {
             const td = area.tasks[t.key];
             if(row[`${t.short} N/A`] !== undefined) td.na = /^(yes|y|true|1|na|n\/a)$/i.test(String(row[`${t.short} N/A`]).trim());
-            if(row[`${t.short} Plan Start`]) td.planStart = normalizeDate(row[`${t.short} Plan Start`]);
-            if(row[`${t.short} Plan End`]) td.planEnd = normalizeDate(row[`${t.short} Plan End`]);
+            if(row[`${t.short} Plan Start`]) taskPlanStart(td) = normalizeDate(row[`${t.short} Plan Start`]);
+            if(row[`${t.short} Plan End`]) taskPlanEnd(td) = normalizeDate(row[`${t.short} Plan End`]);
             if(row[`${t.short} Actual Start`]) td.actualStart = normalizeDate(row[`${t.short} Actual Start`]);
             if(row[`${t.short} Actual End`]) td.actualEnd = normalizeDate(row[`${t.short} Actual End`]);
             if(row[`${t.short} Actual %`] !== undefined && row[`${t.short} Actual %`] !== '')
@@ -4704,17 +4847,109 @@ render = function(){ __originalRender(); scheduleCloudSave(); };
 const __originalRCO = renderCanvasOnly;
 renderCanvasOnly = function(){ __originalRCO(); scheduleCloudSave(); };
 
+/* ===== ROLE LOGIN ===== */
+function setRole(role){
+  ROLE.current = role;
+  try{ localStorage.setItem('scm-b14-role', role); }catch(e){}
+  updateRoleUI();
+  applyRolePermissions();
+  // re-render everything that depends on the active plan dates
+  if(typeof buildTaskSelector === 'function'){
+    renderFloorSelect();
+    buildTaskSelector();
+    setCurrentTask(STATE.currentTask);
+  }
+}
+
+function updateRoleUI(){
+  const badge = $('roleBadge');
+  if(!badge) return;
+  if(!ROLE.current){ badge.style.display = 'none'; return; }
+  badge.style.display = '';
+  badge.classList.remove('cdt','nt');
+  badge.classList.add(ROLE.current);
+  $('roleBadgeIcon').textContent = ROLE.isCDT() ? '🏢' : '🏗';
+  $('roleBadgeText').textContent = ROLE.isCDT() ? 'CĐT' : 'NT';
+}
+
+// Read-only restrictions for NT: hide drawing/floor-management buttons,
+// disable "Push to Cloud" (which is a CDT-only nuclear option).
+function applyRolePermissions(){
+  const ntOnly = ROLE.isNT();
+  // hide buttons NT shouldn't see
+  const hideForNT = ['cloudPushBtn','addFloorBtn','renameFloorBtn','dupFloorBtn','delFloorBtn','copyAreasBtn','loadImageBtn','clearImageBtn','loadBtn'];
+  hideForNT.forEach(id => { const el = $(id); if(el) el.style.display = ntOnly ? 'none' : ''; });
+  // tool-mode buttons: NT can only Select / Pan, not Draw
+  const drawBtn = document.querySelector('[data-mode="draw"]');
+  if(drawBtn) drawBtn.style.display = ntOnly ? 'none' : '';
+  // body class for any other styling hooks
+  document.body.classList.toggle('role-nt', ntOnly);
+  document.body.classList.toggle('role-cdt', !ntOnly);
+}
+
+function showLoginModal(){
+  $('loginModal').classList.add('show');
+  $('roleCDTPwdBox').style.display = 'none';
+  $('roleCDTPwdErr').style.display = 'none';
+  const pwd = $('roleCDTPwd');
+  if(pwd) pwd.value = '';
+}
+function hideLoginModal(){ $('loginModal').classList.remove('show'); }
+
+function logoutAndReask(){
+  try{ localStorage.removeItem('scm-b14-role'); }catch(e){}
+  ROLE.current = null;
+  updateRoleUI();
+  showLoginModal();
+}
+
 // Boot — wait for Firebase module to load
 function boot(){
   init();
+
+  // Wire login modal
+  $('roleNTBtn').addEventListener('click', () => {
+    setRole('nt');
+    hideLoginModal();
+  });
+  $('roleCDTBtn').addEventListener('click', () => {
+    $('roleCDTPwdBox').style.display = '';
+    $('roleCDTPwdErr').style.display = 'none';
+    setTimeout(() => $('roleCDTPwd').focus(), 50);
+  });
+  const submitCDT = () => {
+    const pwd = $('roleCDTPwd').value;
+    if(pwd === SCM_CDT_PASSWORD){
+      setRole('cdt');
+      hideLoginModal();
+    } else {
+      $('roleCDTPwdErr').style.display = '';
+    }
+  };
+  $('roleCDTSubmit').addEventListener('click', submitCDT);
+  $('roleCDTPwd').addEventListener('keydown', e => { if(e.key === 'Enter') submitCDT(); });
+  $('logoutBtn').addEventListener('click', logoutAndReask);
+
   // Wire push button
   $('cloudPushBtn').addEventListener('click', () => {
     if(confirm('Push the current local state to the cloud? This OVERWRITES the cloud copy with what you see here.')) cloudPushAll();
   });
-  // try connecting
+
+  // Decide initial role: localStorage or ask
+  let saved = null;
+  try{ saved = localStorage.getItem('scm-b14-role'); }catch(e){}
+  if(saved === 'cdt' || saved === 'nt'){
+    setRole(saved);
+  } else {
+    showLoginModal();
+    // default to NT silently in memory so the rest of the app has a role to read from
+    ROLE.current = 'nt';
+    applyRolePermissions();
+  }
+
+  // try connecting to cloud regardless of role
   cloudLoadAndSubscribe().then(loaded => {
     if(!loaded){
-      // cloud is empty — keep local defaults; user should Load Project then Push
       setCloudStatus('error','Cloud empty — Load Project + Push');
     }
   });
