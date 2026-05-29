@@ -10,6 +10,9 @@
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
   import { getFirestore, doc, setDoc, getDoc, onSnapshot, collection, getDocs, deleteDoc }
     from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+  import {
+    getAuth, signInAnonymously, signInWithEmailAndPassword, signOut, onAuthStateChanged
+  } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
   const firebaseConfig = {
     apiKey: "AIzaSyD_Nc-WAlPXHqtZjjwY2P5F4VExlOg9C98",
@@ -21,11 +24,22 @@
     measurementId: "G-HP5HZ6MHJS"
   };
 
+  // The UID Firestore rules treat as CDT. Anyone else is NT.
+  const CDT_UID = "w1wAK83k0DPkMKFYtGUOKRUrK2H3";
+  // Fixed (hidden) email used internally for CDT password login.
+  const CDT_EMAIL = "cdt@scm-b14.local";
+
   const fbApp = initializeApp(firebaseConfig);
   const db = getFirestore(fbApp);
+  const auth = getAuth(fbApp);
 
-  // Expose to the rest of the app (non-module script tags can use window.FB)
-  window.FB = { db, doc, setDoc, getDoc, onSnapshot, collection, getDocs, deleteDoc, ready:true };
+  // Expose to the rest of the app
+  window.FB = {
+    db, doc, setDoc, getDoc, onSnapshot, collection, getDocs, deleteDoc,
+    auth, signInAnonymously, signInWithEmailAndPassword, signOut, onAuthStateChanged,
+    CDT_UID, CDT_EMAIL,
+    ready:true,
+  };
   window.dispatchEvent(new Event('firebase-ready'));
 </script>
 <style>
@@ -1120,7 +1134,7 @@
 <header>
   <div class="logo">SCM<span>·B14</span> PROGRESS</div>
   <div class="subtitle">Multi-Task<br>Construction Tracker</div>
-  <div style="font-size:11px;color:#000;background:var(--green);padding:3px 10px;border-radius:12px;font-weight:700;font-family:var(--font-mono)">v15 · CDT/NT</div>
+  <div style="font-size:11px;color:#000;background:var(--green);padding:3px 10px;border-radius:12px;font-weight:700;font-family:var(--font-mono)">v16 · SECURE</div>
   <div class="toolbar">
     <button class="btn" id="loadImageBtn" title="Load floor plan (image or PDF) for the current floor">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg>
@@ -2438,8 +2452,9 @@ function ensureAreaTasks(a){
   if(a.labelOffset === undefined) a.labelOffset = null;
 }
 
-/* ===== ROLE / PERSPECTIVE ===== */
-const SCM_CDT_PASSWORD = "ScmB14";   // ← bạn đổi chuỗi này thành password CDT của bạn
+/* ===== ROLE / PERSPECTIVE =====
+   Role is determined by Firebase Auth UID — checked server-side via Firestore Rules.
+   The CDT UID is the one we created in Firebase Console; everyone else (anonymous) is NT. */
 const ROLE = {
   current: null,     // 'cdt' or 'nt'
   isCDT(){ return this.current === 'cdt'; },
@@ -4631,6 +4646,24 @@ function buildMetaDoc(){
   };
 }
 
+// The fields that are CDT-only and must live in the separate /cdtPlan collection.
+const CDT_PLAN_FIELDS = ['planStartCDT','planEndCDT','planStartCDTHistory','planEndCDTHistory'];
+
+// Strip CDT plan fields from each area before writing to the public /floors collection.
+function stripCDTFromAreas(areas){
+  return (areas||[]).map(a => {
+    const tasks = {};
+    Object.keys(a.tasks||{}).forEach(k => {
+      const t = a.tasks[k];
+      const cleaned = {...t};
+      CDT_PLAN_FIELDS.forEach(f => { delete cleaned[f]; });
+      tasks[k] = cleaned;
+    });
+    return {...a, tasks};
+  });
+}
+
+// Build the public floor doc (no CDT plan dates inside).
 function buildFloorDoc(f){
   return {
     id: f.id,
@@ -4638,27 +4671,69 @@ function buildFloorDoc(f){
     image: f.image || '',
     imgW: f.imgW || 0,
     imgH: f.imgH || 0,
-    areas: f.areas || [],
+    areas: stripCDTFromAreas(f.areas),
     updatedAt: new Date().toISOString(),
   };
 }
 
+// Build the CDT-only plan doc for a floor: { areaId: { taskKey: {planStartCDT, planEndCDT, planStartCDTHistory, planEndCDTHistory} } }
+function buildCdtPlanDoc(f){
+  const out = {floorId: f.id, plans:{}, updatedAt: new Date().toISOString()};
+  (f.areas||[]).forEach(a => {
+    const tradeMap = {};
+    Object.keys(a.tasks||{}).forEach(k => {
+      const t = a.tasks[k];
+      tradeMap[k] = {
+        planStartCDT: t.planStartCDT || '',
+        planEndCDT:   t.planEndCDT   || '',
+        planStartCDTHistory: t.planStartCDTHistory || [],
+        planEndCDTHistory:   t.planEndCDTHistory   || [],
+      };
+    });
+    out.plans[a.id] = tradeMap;
+  });
+  return out;
+}
+
+// Merge a /cdtPlan doc into the in-memory floor (called for CDT users only).
+function mergeCdtPlanIntoFloor(floor, cdtDoc){
+  if(!cdtDoc || !cdtDoc.plans) return;
+  (floor.areas||[]).forEach(a => {
+    const aPlan = cdtDoc.plans[a.id];
+    if(!aPlan) return;
+    Object.keys(a.tasks||{}).forEach(k => {
+      const tPlan = aPlan[k];
+      if(!tPlan) return;
+      a.tasks[k].planStartCDT        = tPlan.planStartCDT || '';
+      a.tasks[k].planEndCDT          = tPlan.planEndCDT   || '';
+      a.tasks[k].planStartCDTHistory = tPlan.planStartCDTHistory || [];
+      a.tasks[k].planEndCDTHistory   = tPlan.planEndCDTHistory   || [];
+    });
+  });
+}
+
 async function cloudPushAll(){
   if(!window.FB || !window.FB.ready){ alert('Cloud not ready yet.'); return; }
+  if(!ROLE.isCDT()){ alert('Only CDT can push.'); return; }
   try{
     setCloudStatus('saving','Pushing all…');
     const { db, doc, setDoc, collection, getDocs, deleteDoc } = window.FB;
-    // delete cloud floors that no longer exist locally
+    // delete cloud floors / cdtPlans that no longer exist locally
     const floorsCol = collection(db, 'projects', CLOUD.PROJECT_ID, 'floors');
     const existing = await getDocs(floorsCol);
     const localIds = new Set(STATE.floors.map(f => f.id));
     const dels = [];
     existing.forEach(d => { if(!localIds.has(d.id)) dels.push(deleteDoc(d.ref)); });
+    // also clean cdtPlan
+    const cdtCol = collection(db, 'projects', CLOUD.PROJECT_ID, 'cdtPlan');
+    const existingCdt = await getDocs(cdtCol);
+    existingCdt.forEach(d => { if(!localIds.has(d.id)) dels.push(deleteDoc(d.ref)); });
     await Promise.all(dels);
-    // upload meta + each floor
+    // upload meta + each floor (public) + each cdtPlan (private)
     await setDoc(doc(db,'projects', CLOUD.PROJECT_ID,'meta','main'), buildMetaDoc());
     for(const f of STATE.floors){
-      await setDoc(doc(db,'projects', CLOUD.PROJECT_ID,'floors', f.id), buildFloorDoc(f));
+      await setDoc(doc(db,'projects', CLOUD.PROJECT_ID,'floors',  f.id), buildFloorDoc(f));
+      await setDoc(doc(db,'projects', CLOUD.PROJECT_ID,'cdtPlan', f.id), buildCdtPlanDoc(f));
       CLOUD.lastFloorImageHash[f.id] = strHash(f.image||'');
     }
     setCloudStatus('synced','All synced');
@@ -4672,20 +4747,24 @@ async function cloudPushAll(){
 function scheduleCloudSave(){
   if(!window.FB || !window.FB.ready) return;
   if(CLOUD.applyingRemote) return;
+  if(!ROLE.current) return;   // wait until user picked a role
   if(CLOUD.saveTimer) clearTimeout(CLOUD.saveTimer);
   setCloudStatus('saving','Saving…');
   CLOUD.saveTimer = setTimeout(async () => {
     try{
       const { db, doc, setDoc } = window.FB;
-      await setDoc(doc(db,'projects', CLOUD.PROJECT_ID,'meta','main'), buildMetaDoc());
-      // only push the CURRENT floor (lightweight, most edits are on one floor at a time)
       const cf = currentFloor();
+
+      // Only CDT can write to /meta and /cdtPlan
+      if(ROLE.isCDT()){
+        await setDoc(doc(db,'projects', CLOUD.PROJECT_ID,'meta','main'), buildMetaDoc());
+        if(cf) await setDoc(doc(db,'projects', CLOUD.PROJECT_ID,'cdtPlan', cf.id), buildCdtPlanDoc(cf));
+      }
+
+      // Both CDT and NT can write to /floors (NT edits Plan NT + Actual)
       if(cf){
-        const imgHash = strHash(cf.image||'');
-        const prevHash = CLOUD.lastFloorImageHash[cf.id];
-        // if the only change is non-image data, still send the full floor doc
         await setDoc(doc(db,'projects', CLOUD.PROJECT_ID,'floors', cf.id), buildFloorDoc(cf));
-        CLOUD.lastFloorImageHash[cf.id] = imgHash;
+        CLOUD.lastFloorImageHash[cf.id] = strHash(cf.image||'');
       }
       setCloudStatus('synced','Synced ' + new Date().toLocaleTimeString().slice(0,5));
     } catch(err){
@@ -4697,8 +4776,9 @@ function scheduleCloudSave(){
 
 async function cloudLoadAndSubscribe(){
   if(!window.FB || !window.FB.ready) return;
+  if(!ROLE.current){ setCloudStatus('error','No role yet'); return false; }
   setCloudStatus('connecting','Connecting…');
-  const { db, doc, getDoc, onSnapshot, collection, getDocs } = window.FB;
+  const { db, doc, setDoc, getDoc, onSnapshot, collection, getDocs } = window.FB;
   try{
     // initial fetch
     const metaSnap = await getDoc(doc(db,'projects', CLOUD.PROJECT_ID,'meta','main'));
@@ -4707,7 +4787,15 @@ async function cloudLoadAndSubscribe(){
       setCloudStatus('error','Cloud is empty — use “Push to Cloud”');
       return false;
     }
-    applyCloudState(metaSnap.data(), floorsSnap);
+    // For CDT: also fetch /cdtPlan and merge into floors before applying
+    let cdtPlanMap = {};
+    if(ROLE.isCDT()){
+      try{
+        const cdtSnap = await getDocs(collection(db,'projects', CLOUD.PROJECT_ID,'cdtPlan'));
+        cdtSnap.forEach(d => { cdtPlanMap[d.id] = d.data(); });
+      } catch(e){ /* ignore */ }
+    }
+    applyCloudState(metaSnap.data(), floorsSnap, cdtPlanMap);
 
     // listen for changes from elsewhere
     CLOUD.unsubscribes.forEach(u => u());
@@ -4733,6 +4821,44 @@ async function cloudLoadAndSubscribe(){
         });
       })
     );
+    // CDT-only: subscribe to cdtPlan changes
+    if(ROLE.isCDT()){
+      CLOUD.unsubscribes.push(
+        onSnapshot(collection(db,'projects', CLOUD.PROJECT_ID,'cdtPlan'), snap => {
+          snap.docChanges().forEach(ch => {
+            if(ch.type === 'modified' || ch.type === 'added'){
+              const f = STATE.floors.find(x => x.id === ch.doc.id);
+              if(f){ mergeCdtPlanIntoFloor(f, ch.doc.data()); render(); }
+            }
+          });
+        })
+      );
+
+      // One-time migration: if /cdtPlan is empty but floors still contain CDT plan
+      // dates (from v14/v15 before the split), persist them now to /cdtPlan and
+      // strip them out of /floors. Idempotent: runs only when needed.
+      const cdtEmpty = Object.keys(cdtPlanMap || {}).length === 0;
+      const hasCdtInFloors = STATE.floors.some(f =>
+        (f.areas||[]).some(a =>
+          Object.keys(a.tasks||{}).some(k =>
+            a.tasks[k].planStartCDT || a.tasks[k].planEndCDT
+          )
+        )
+      );
+      if(cdtEmpty && hasCdtInFloors){
+        setCloudStatus('saving','Migrating Plan CDT…');
+        try{
+          for(const f of STATE.floors){
+            await setDoc(doc(db,'projects', CLOUD.PROJECT_ID,'cdtPlan', f.id), buildCdtPlanDoc(f));
+            await setDoc(doc(db,'projects', CLOUD.PROJECT_ID,'floors',  f.id), buildFloorDoc(f));
+          }
+          setCloudStatus('synced','Migration done');
+        } catch(e){
+          console.error(e);
+          setCloudStatus('error','Migration failed: ' + e.message);
+        }
+      }
+    }
     setCloudStatus('synced','Live');
     return true;
   } catch(err){
@@ -4742,8 +4868,9 @@ async function cloudLoadAndSubscribe(){
   }
 }
 
-function applyCloudState(meta, floorsSnap){
+function applyCloudState(meta, floorsSnap, cdtPlanMap){
   CLOUD.applyingRemote = true;
+  cdtPlanMap = cdtPlanMap || {};
   try{
     if(Array.isArray(meta.tasks) && meta.tasks.length){
       TASKS = meta.tasks.map(t => ({key:t.key, name:t.name, short:t.short, color:t.color, custom:!!t.custom}));
@@ -4764,6 +4891,8 @@ function applyCloudState(meta, floorsSnap){
     STATE.floors = orderedIds.map(id => {
       const f = docs[id];
       (f.areas||[]).forEach(a => ensureAreaTasks(a));
+      // Merge CDT-only plan dates (if we received them, i.e. user is CDT)
+      if(cdtPlanMap[id]) mergeCdtPlanIntoFloor(f, cdtPlanMap[id]);
       CLOUD.lastFloorImageHash[id] = strHash(f.image||'');
       return f;
     });
@@ -4826,10 +4955,27 @@ function applyRemoteFloor(f){
   try{
     (f.areas||[]).forEach(a => ensureAreaTasks(a));
     const idx = STATE.floors.findIndex(x => x.id === f.id);
+    // Preserve CDT-only plan dates that we already have locally (the public /floors
+    // collection never carries them; only /cdtPlan does).
+    if(ROLE.isCDT() && idx !== -1){
+      const oldFloor = STATE.floors[idx];
+      const oldByArea = {};
+      (oldFloor.areas||[]).forEach(a => { oldByArea[a.id] = a; });
+      (f.areas||[]).forEach(a => {
+        const old = oldByArea[a.id];
+        if(!old) return;
+        Object.keys(a.tasks||{}).forEach(k => {
+          const oldT = (old.tasks||{})[k];
+          if(!oldT) return;
+          CDT_PLAN_FIELDS.forEach(fld => {
+            if(oldT[fld] !== undefined) a.tasks[k][fld] = oldT[fld];
+          });
+        });
+      });
+    }
     if(idx === -1) STATE.floors.push(f);
     else STATE.floors[idx] = f;
     CLOUD.lastFloorImageHash[f.id] = strHash(f.image||'');
-    // if it's the floor we are looking at, refresh the canvas + image
     if(STATE.currentFloorId === f.id){
       if(floorImg.src !== (f.image||DEFAULT_IMG)) floorImg.src = f.image || DEFAULT_IMG;
     }
@@ -4853,7 +4999,6 @@ function setRole(role){
   try{ localStorage.setItem('scm-b14-role', role); }catch(e){}
   updateRoleUI();
   applyRolePermissions();
-  // re-render everything that depends on the active plan dates
   if(typeof buildTaskSelector === 'function'){
     renderFloorSelect();
     buildTaskSelector();
@@ -4872,17 +5017,12 @@ function updateRoleUI(){
   $('roleBadgeText').textContent = ROLE.isCDT() ? 'CĐT' : 'NT';
 }
 
-// Read-only restrictions for NT: hide drawing/floor-management buttons,
-// disable "Push to Cloud" (which is a CDT-only nuclear option).
 function applyRolePermissions(){
   const ntOnly = ROLE.isNT();
-  // hide buttons NT shouldn't see
   const hideForNT = ['cloudPushBtn','addFloorBtn','renameFloorBtn','dupFloorBtn','delFloorBtn','copyAreasBtn','loadImageBtn','clearImageBtn','loadBtn'];
   hideForNT.forEach(id => { const el = $(id); if(el) el.style.display = ntOnly ? 'none' : ''; });
-  // tool-mode buttons: NT can only Select / Pan, not Draw
   const drawBtn = document.querySelector('[data-mode="draw"]');
   if(drawBtn) drawBtn.style.display = ntOnly ? 'none' : '';
-  // body class for any other styling hooks
   document.body.classList.toggle('role-nt', ntOnly);
   document.body.classList.toggle('role-cdt', !ntOnly);
 }
@@ -4896,11 +5036,47 @@ function showLoginModal(){
 }
 function hideLoginModal(){ $('loginModal').classList.remove('show'); }
 
-function logoutAndReask(){
+async function logoutAndReask(){
   try{ localStorage.removeItem('scm-b14-role'); }catch(e){}
+  // Unsubscribe from realtime listeners so we don't keep using old auth
+  if(window.CLOUD){
+    CLOUD.unsubscribes.forEach(u => { try{ u(); }catch(e){} });
+    CLOUD.unsubscribes = [];
+  }
+  try{
+    if(window.FB && window.FB.auth) await window.FB.signOut(window.FB.auth);
+  }catch(e){}
   ROLE.current = null;
   updateRoleUI();
+  setCloudStatus('connecting','Logged out');
   showLoginModal();
+}
+
+// Sign in to Firebase based on chosen role, then connect to cloud.
+async function chooseRole(role, password){
+  const { auth, signInAnonymously, signInWithEmailAndPassword, CDT_EMAIL, CDT_UID } = window.FB;
+  try{
+    setCloudStatus('connecting','Signing in…');
+    let cred;
+    if(role === 'cdt'){
+      cred = await signInWithEmailAndPassword(auth, CDT_EMAIL, password);
+      if(cred.user.uid !== CDT_UID){
+        // shouldn't happen, but guard
+        throw new Error('UID mismatch — contact admin');
+      }
+    } else {
+      cred = await signInAnonymously(auth);
+    }
+    setRole(role);
+    hideLoginModal();
+    // Now connect (which uses ROLE.current to decide whether to fetch /cdtPlan)
+    const loaded = await cloudLoadAndSubscribe();
+    if(!loaded) setCloudStatus('error','Cloud empty — Load Project + Push (CDT only)');
+    return true;
+  } catch(err){
+    console.error(err);
+    return err;
+  }
 }
 
 // Boot — wait for Firebase module to load
@@ -4908,51 +5084,48 @@ function boot(){
   init();
 
   // Wire login modal
-  $('roleNTBtn').addEventListener('click', () => {
-    setRole('nt');
-    hideLoginModal();
+  $('roleNTBtn').addEventListener('click', async () => {
+    setCloudStatus('connecting','Signing in…');
+    const res = await chooseRole('nt');
+    if(res !== true){
+      alert('Sign-in failed: ' + (res && res.message ? res.message : 'unknown error'));
+      setCloudStatus('error','Sign-in failed');
+    }
   });
   $('roleCDTBtn').addEventListener('click', () => {
     $('roleCDTPwdBox').style.display = '';
     $('roleCDTPwdErr').style.display = 'none';
     setTimeout(() => $('roleCDTPwd').focus(), 50);
   });
-  const submitCDT = () => {
+  const submitCDT = async () => {
     const pwd = $('roleCDTPwd').value;
-    if(pwd === SCM_CDT_PASSWORD){
-      setRole('cdt');
-      hideLoginModal();
-    } else {
+    if(!pwd){ $('roleCDTPwdErr').textContent = 'Nhập password.'; $('roleCDTPwdErr').style.display=''; return; }
+    const res = await chooseRole('cdt', pwd);
+    if(res !== true){
+      // err.code: 'auth/wrong-password', 'auth/invalid-credential', etc.
+      $('roleCDTPwdErr').textContent = 'Sai password.';
       $('roleCDTPwdErr').style.display = '';
+      $('roleCDTPwd').focus();
+      $('roleCDTPwd').select();
+      setCloudStatus('error','Sign-in failed');
     }
   };
   $('roleCDTSubmit').addEventListener('click', submitCDT);
   $('roleCDTPwd').addEventListener('keydown', e => { if(e.key === 'Enter') submitCDT(); });
   $('logoutBtn').addEventListener('click', logoutAndReask);
 
-  // Wire push button
+  // Wire push button (CDT only — also enforced server-side)
   $('cloudPushBtn').addEventListener('click', () => {
+    if(!ROLE.isCDT()){ alert('Only CDT can push to cloud.'); return; }
     if(confirm('Push the current local state to the cloud? This OVERWRITES the cloud copy with what you see here.')) cloudPushAll();
   });
 
-  // Decide initial role: localStorage or ask
-  let saved = null;
-  try{ saved = localStorage.getItem('scm-b14-role'); }catch(e){}
-  if(saved === 'cdt' || saved === 'nt'){
-    setRole(saved);
-  } else {
-    showLoginModal();
-    // default to NT silently in memory so the rest of the app has a role to read from
-    ROLE.current = 'nt';
-    applyRolePermissions();
-  }
-
-  // try connecting to cloud regardless of role
-  cloudLoadAndSubscribe().then(loaded => {
-    if(!loaded){
-      setCloudStatus('error','Cloud empty — Load Project + Push');
-    }
-  });
+  // Always start with the login modal — no auto-login from cached role,
+  // because Firebase Auth session may be different from saved role.
+  ROLE.current = null;
+  applyRolePermissions();
+  setCloudStatus('connecting','Please sign in');
+  showLoginModal();
 }
 if(window.FB && window.FB.ready) boot();
 else window.addEventListener('firebase-ready', boot);
