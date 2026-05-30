@@ -4609,7 +4609,11 @@ function renderStats(){
 }
 
 /* =============================================================
-   EXCEL EXPORT/IMPORT - MULTI-SHEET (one per task) + ALL sheet
+   EXCEL EXPORT/IMPORT
+   - "ALL" sheet : grouped headers (row 1 = trade group, row 2 = field)
+                   real Excel dates, % format, freeze panes
+   - One sheet per floor (same layout, omits Floor column)
+   - "Plan History" sheet : separate, one row per revised (area, trade, field)
 ============================================================= */
 function exportExcel(){
   const totalAreas = STATE.floors.reduce((s,f) => s + (f.areas||[]).length, 0);
@@ -4617,97 +4621,131 @@ function exportExcel(){
     alert('No areas to export across any floor.');
     return;
   }
-  const includeCDT = ROLE.isCDT();   // NT export skips Plan CDT columns entirely
+  const includeCDT = ROLE.isCDT();   // NT export skips Plan CDT columns
   const wb = XLSX.utils.book_new();
 
-  // ---------- ALL sheet ----------
-  const allRows = [];
+  // Convert "YYYY-MM-DD" → native Date so Excel treats it as a real date.
+  // Empty / invalid input becomes '' so the cell is blank (not 1899-12-30).
+  const toDate = s => {
+    if(!s) return '';
+    const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if(m) return new Date(Number(m[1]), Number(m[2])-1, Number(m[3]));
+    const d = new Date(s);
+    return isNaN(d) ? '' : d;
+  };
+
+  // Column shape per trade (history is in a SEPARATE sheet for readability).
+  // The BASE column titles (without prefix) — used for the merged group header
+  // pretty-print, and to compose the per-trade unique detail headers below.
+  const tradeColsBase = includeCDT
+    ? ['N/A','Plan Start CDT','Plan End CDT','Plan Start NT','Plan End NT','Actual Start','Actual End','Actual %']
+    : ['N/A','Plan Start NT','Plan End NT','Actual Start','Actual End','Actual %'];
+  const colsPerTrade = tradeColsBase.length;
+  // Detail headers PREFIX each column with the trade's short code so that two
+  // trades sharing the same field name (e.g. "Plan Start CDT") still get
+  // unique cell keys when sheet_to_json reads them on import. The merged
+  // group header in row 0 carries the friendly full name ("Waterproof") so
+  // the prefix duplication doesn't hurt readability.
+  const detailColsForTrade = (t) => tradeColsBase.map(c => `${t.short} ${c}`);
+  // Indices (within a trade block) of date columns and the percent column.
+  const dateOffsets = includeCDT ? [1,2,3,4,5,6] : [1,2,3,4];
+  const pctOffsetInTrade = colsPerTrade - 1;
+
+  // Walks a freshly-built sheet and applies number formats to dates / percent.
+  // Pure-display formatting; the underlying values are real Dates and Numbers.
+  const applyFormats = (ws, baseColCount, dataRowCount) => {
+    for(let r = 2; r < 2 + dataRowCount; r++){
+      TASKS.forEach((t, ti) => {
+        const tradeStart = baseColCount + ti * colsPerTrade;
+        dateOffsets.forEach(off => {
+          const addr = XLSX.utils.encode_cell({r, c: tradeStart + off});
+          const cell = ws[addr];
+          if(cell && cell.v instanceof Date){
+            cell.t = 'd';
+            cell.z = 'yyyy-mm-dd';
+          }
+        });
+        const pctAddr = XLSX.utils.encode_cell({r, c: tradeStart + pctOffsetInTrade});
+        const pctCell = ws[pctAddr];
+        // Keep value as 0..100 number; show with literal % suffix so the
+        // round-trip through Excel doesn't accidentally divide by 100.
+        if(pctCell) pctCell.z = '0"%"';
+      });
+    }
+  };
+  // Merge the group-header row across each trade's columns.
+  const buildMerges = (baseColCount) => TASKS.map((t, i) => {
+    const startCol = baseColCount + i * colsPerTrade;
+    return { s: {r:0, c:startCol}, e: {r:0, c:startCol + colsPerTrade - 1} };
+  });
+  // Build a single data row (array form, no per-row object keys).
+  const buildDataRow = (leading, area) => {
+    ensureAreaTasks(area);
+    const row = [...leading];
+    TASKS.forEach(t => {
+      const td = area.tasks[t.key];
+      row.push(td.na ? 'YES' : '');
+      if(includeCDT){
+        row.push(toDate(td.planStartCDT));
+        row.push(toDate(td.planEndCDT));
+      }
+      row.push(toDate(td.planStartNT));
+      row.push(toDate(td.planEndNT));
+      row.push(toDate(td.actualStart));
+      row.push(toDate(td.actualEnd));
+      row.push(Number(td.percentActual)||0);
+    });
+    return row;
+  };
+
+  // ===== ALL sheet =====
+  const allBase = ['No.', 'Floor', 'Floor ID', 'Area ID', 'Area Name'];
+  const allGroup  = [...allBase.map(()=>''), ...TASKS.flatMap(t => [t.name, ...Array(colsPerTrade-1).fill('')])];
+  const allDetail = [...allBase, ...TASKS.flatMap(t => detailColsForTrade(t))];
+  const allDataRows = [];
   let counter = 1;
   STATE.floors.forEach(f => {
     (f.areas||[]).forEach(a => {
-      ensureAreaTasks(a);
-      const row = {
-        'No.': counter++,
-        'Floor': f.name,
-        'Floor ID': f.id,
-        'Area ID': a.id,
-        'Area Name': a.name,
-      };
-      TASKS.forEach(t => {
-        const td = a.tasks[t.key];
-        const histToStr = arr => Array.isArray(arr) && arr.length ? arr.join(' | ') : '';
-        row[`${t.short} N/A`] = td.na ? 'YES' : '';
-        if(includeCDT){
-          row[`${t.short} Plan Start CDT`]      = td.planStartCDT || '';
-          row[`${t.short} Plan Start CDT Hist`] = histToStr(td.planStartCDTHistory);
-          row[`${t.short} Plan End CDT`]        = td.planEndCDT   || '';
-          row[`${t.short} Plan End CDT Hist`]   = histToStr(td.planEndCDTHistory);
-        }
-        row[`${t.short} Plan Start NT`]      = td.planStartNT || '';
-        row[`${t.short} Plan Start NT Hist`] = histToStr(td.planStartNTHistory);
-        row[`${t.short} Plan End NT`]        = td.planEndNT   || '';
-        row[`${t.short} Plan End NT Hist`]   = histToStr(td.planEndNTHistory);
-        row[`${t.short} Actual Start`] = td.actualStart || '';
-        row[`${t.short} Actual End`]   = td.actualEnd   || '';
-        row[`${t.short} Actual %`]     = Number(td.percentActual)||0;
-      });
-      allRows.push(row);
+      allDataRows.push(buildDataRow([counter++, f.name, f.id, a.id, a.name], a));
     });
   });
-  const wsAll = XLSX.utils.json_to_sheet(allRows);
+  const wsAll = XLSX.utils.aoa_to_sheet([allGroup, allDetail, ...allDataRows]);
+  wsAll['!merges'] = buildMerges(allBase.length);
+  applyFormats(wsAll, allBase.length, allDataRows.length);
+  wsAll['!views'] = [{ state: 'frozen', xSplit: allBase.length, ySplit: 2 }];
   wsAll['!cols'] = [
-    {wch:5},{wch:8},{wch:22},{wch:22},{wch:22},
-    ...TASKS.flatMap(()=>{
-      const widths = [{wch:5}];
-      if(includeCDT) widths.push({wch:12},{wch:22},{wch:12},{wch:22});
-      widths.push({wch:12},{wch:22},{wch:12},{wch:22});
-      widths.push({wch:12},{wch:12});
-      widths.push({wch:10});
-      return widths;
+    {wch:5},{wch:10},{wch:22},{wch:22},{wch:26},
+    ...TASKS.flatMap(() => {
+      const w = [{wch:6}];                              // N/A
+      if(includeCDT) w.push({wch:13},{wch:13});         // Plan CDT
+      w.push({wch:13},{wch:13});                        // Plan NT
+      w.push({wch:13},{wch:13});                        // Actual
+      w.push({wch:9});                                  // %
+      return w;
     }),
   ];
   XLSX.utils.book_append_sheet(wb, wsAll, 'ALL');
 
-  // ---------- One sheet per FLOOR ----------
+  // ===== Per-floor sheets =====
   STATE.floors.forEach(f => {
     if((f.areas||[]).length === 0) return;
-    const rows = (f.areas||[]).map((a, i) => {
-      ensureAreaTasks(a);
-      const row = {
-        'No.': i+1,
-        'Area ID': a.id,
-        'Area Name': a.name,
-      };
-      TASKS.forEach(t => {
-        const td = a.tasks[t.key];
-        const histToStr = arr => Array.isArray(arr) && arr.length ? arr.join(' | ') : '';
-        row[`${t.short} N/A`] = td.na ? 'YES' : '';
-        if(includeCDT){
-          row[`${t.short} Plan Start CDT`]      = td.planStartCDT || '';
-          row[`${t.short} Plan Start CDT Hist`] = histToStr(td.planStartCDTHistory);
-          row[`${t.short} Plan End CDT`]        = td.planEndCDT   || '';
-          row[`${t.short} Plan End CDT Hist`]   = histToStr(td.planEndCDTHistory);
-        }
-        row[`${t.short} Plan Start NT`]      = td.planStartNT || '';
-        row[`${t.short} Plan Start NT Hist`] = histToStr(td.planStartNTHistory);
-        row[`${t.short} Plan End NT`]        = td.planEndNT   || '';
-        row[`${t.short} Plan End NT Hist`]   = histToStr(td.planEndNTHistory);
-        row[`${t.short} Actual Start`]  = td.actualStart || '';
-        row[`${t.short} Actual End`]    = td.actualEnd   || '';
-        row[`${t.short} Actual %`]      = Number(td.percentActual)||0;
-      });
-      return row;
-    });
-    const ws = XLSX.utils.json_to_sheet(rows);
+    const fBase = ['No.', 'Area ID', 'Area Name'];
+    const fGroup  = [...fBase.map(()=>''), ...TASKS.flatMap(t => [t.name, ...Array(colsPerTrade-1).fill('')])];
+    const fDetail = [...fBase, ...TASKS.flatMap(t => detailColsForTrade(t))];
+    const fData = (f.areas||[]).map((a, i) => buildDataRow([i+1, a.id, a.name], a));
+    const ws = XLSX.utils.aoa_to_sheet([fGroup, fDetail, ...fData]);
+    ws['!merges'] = buildMerges(fBase.length);
+    applyFormats(ws, fBase.length, fData.length);
+    ws['!views'] = [{ state: 'frozen', xSplit: fBase.length, ySplit: 2 }];
     ws['!cols'] = [
-      {wch:5},{wch:22},{wch:22},
-      ...TASKS.flatMap(()=>{
-        const widths = [{wch:5}];
-        if(includeCDT) widths.push({wch:12},{wch:22},{wch:12},{wch:22});
-        widths.push({wch:12},{wch:22},{wch:12},{wch:22});
-        widths.push({wch:12},{wch:12});
-        widths.push({wch:10});
-        return widths;
+      {wch:5},{wch:22},{wch:26},
+      ...TASKS.flatMap(() => {
+        const w = [{wch:6}];
+        if(includeCDT) w.push({wch:13},{wch:13});
+        w.push({wch:13},{wch:13});
+        w.push({wch:13},{wch:13});
+        w.push({wch:9});
+        return w;
       }),
     ];
     let sheetName = (f.name || 'Floor').replace(/[\[\]\/\\?*]/g,'').slice(0,31);
@@ -4715,6 +4753,74 @@ function exportExcel(){
     while(wb.SheetNames.includes(sheetName)){ sheetName = (f.name + '-' + (++n)).slice(0,31); }
     XLSX.utils.book_append_sheet(wb, ws, sheetName);
   });
+
+  // ===== Plan History sheet =====
+  // One row per (area × trade × plan-field) that has at least one revision.
+  // Layout: No. | Floor | Floor ID | Area ID | Area Name | Trade | Field |
+  //         Rev 1 | Rev 2 | ... | Rev N | Current
+  // Rev columns expand to fit the longest history across all rows.
+  const histFieldDefs = includeCDT
+    ? [
+        { key: 'planStartCDT', label: 'Plan Start CDT', histKey: 'planStartCDTHistory' },
+        { key: 'planEndCDT',   label: 'Plan End CDT',   histKey: 'planEndCDTHistory' },
+        { key: 'planStartNT',  label: 'Plan Start NT',  histKey: 'planStartNTHistory' },
+        { key: 'planEndNT',    label: 'Plan End NT',    histKey: 'planEndNTHistory' },
+      ]
+    : [
+        { key: 'planStartNT', label: 'Plan Start NT', histKey: 'planStartNTHistory' },
+        { key: 'planEndNT',   label: 'Plan End NT',   histKey: 'planEndNTHistory' },
+      ];
+  const histEntries = [];
+  let maxRevs = 0;
+  STATE.floors.forEach(f => {
+    (f.areas||[]).forEach(a => {
+      ensureAreaTasks(a);
+      TASKS.forEach(t => {
+        const td = a.tasks[t.key];
+        histFieldDefs.forEach(ff => {
+          const arr = Array.isArray(td[ff.histKey]) ? td[ff.histKey] : [];
+          if(arr.length === 0) return;
+          maxRevs = Math.max(maxRevs, arr.length);
+          histEntries.push({
+            floor: f.name, floorId: f.id, areaId: a.id, areaName: a.name,
+            trade: t.short + ' · ' + t.name, field: ff.label,
+            revs: arr.map(toDate), current: toDate(td[ff.key]),
+          });
+        });
+      });
+    });
+  });
+  if(histEntries.length > 0){
+    const histBase = ['No.', 'Floor', 'Floor ID', 'Area ID', 'Area Name', 'Trade', 'Field'];
+    const revHeaders = Array.from({length: maxRevs}, (_, i) => `Rev ${i+1}`);
+    const headers = [...histBase, ...revHeaders, 'Current'];
+    const histAoa = [headers];
+    histEntries.forEach((e, i) => {
+      const row = [i+1, e.floor, e.floorId, e.areaId, e.areaName, e.trade, e.field];
+      for(let j = 0; j < maxRevs; j++) row.push(e.revs[j] !== undefined ? e.revs[j] : '');
+      row.push(e.current);
+      histAoa.push(row);
+    });
+    const wsHist = XLSX.utils.aoa_to_sheet(histAoa);
+    // Date-format every Rev * + Current cell
+    for(let r = 1; r < histAoa.length; r++){
+      for(let c = histBase.length; c <= histBase.length + maxRevs; c++){
+        const addr = XLSX.utils.encode_cell({r, c});
+        const cell = wsHist[addr];
+        if(cell && cell.v instanceof Date){
+          cell.t = 'd';
+          cell.z = 'yyyy-mm-dd';
+        }
+      }
+    }
+    wsHist['!views'] = [{ state: 'frozen', xSplit: histBase.length, ySplit: 1 }];
+    wsHist['!cols'] = [
+      {wch:5},{wch:10},{wch:22},{wch:22},{wch:26},{wch:24},{wch:18},
+      ...Array.from({length: maxRevs}, () => ({wch:13})),
+      {wch:13},
+    ];
+    XLSX.utils.book_append_sheet(wb, wsHist, 'Plan History');
+  }
 
   const roleTag = ROLE.isCDT() ? 'CDT' : 'NT';
   const fname = `SCM-B14-${roleTag}-${new Date().toISOString().slice(0,10)}.xlsx`;
@@ -4808,10 +4914,14 @@ function importExcel(e){
           const aE = row[`${t.short} Actual End`];
           if(aS !== undefined && aS !== '') td.actualStart = normalizeDate(aS);
           if(aE !== undefined && aE !== '') td.actualEnd   = normalizeDate(aE);
-          // Actual %
+          // Actual % — accept raw numbers ("85") AND format strings ("85%")
+          // so files exported with the new % cell-format round-trip cleanly.
           const ap = row[`${t.short} Actual %`];
-          if(ap !== undefined && ap !== '')
-            td.percentActual = Math.max(0, Math.min(100, Number(ap)||0));
+          if(ap !== undefined && ap !== ''){
+            const cleaned = String(ap).replace(/[%\s,]/g, '');
+            const num = Number(cleaned);
+            td.percentActual = Math.max(0, Math.min(100, isNaN(num) ? 0 : num));
+          }
 
           // === Plan History columns ===
           // The export emits 4 history columns per task (Plan Start/End × CDT/NT)
@@ -4863,10 +4973,78 @@ function importExcel(e){
         return area ? {area, floor} : null;
       };
 
+      // The new export format uses TWO header rows: row 0 is the trade group
+      // (merged across each trade), row 1 is the actual field names. Old files
+      // only have a single header row. Detect which we're dealing with by
+      // peeking at cell A1 — if it's "No." that's the old single-row layout,
+      // otherwise it's the new two-row layout and we tell sheet_to_json to
+      // skip the group row.
+      const readSheet = (ws) => {
+        const a1 = ws['A1'];
+        const oldFormat = a1 && String(a1.v).trim().toLowerCase() === 'no.';
+        // raw:true → cells come back as their native JS types: Date for date
+        // cells (workbook was read with cellDates:true), Number for numeric
+        // cells, String for text. This avoids locale-specific date formatting
+        // ("5/1/26" vs "1/5/26") that raw:false would inject.
+        return XLSX.utils.sheet_to_json(ws, {
+          raw: true,
+          range: oldFormat ? 0 : 1,
+        });
+      };
+
+      // ===== Process Plan History sheet FIRST =====
+      // Order matters: we set the historical revision arrays from this sheet
+      // before processing ALL/per-floor sheets, so that any auto-push (when
+      // a current plan date in those sheets has changed) appends correctly
+      // on top of an already-correct history.
+      if(wb.SheetNames.includes('Plan History')){
+        const ws = wb.Sheets['Plan History'];
+        const rows = XLSX.utils.sheet_to_json(ws, { raw: true });
+        const fieldMap = {
+          'Plan Start CDT': { hist: 'planStartCDTHistory', cdtOnly: true  },
+          'Plan End CDT':   { hist: 'planEndCDTHistory',   cdtOnly: true  },
+          'Plan Start NT':  { hist: 'planStartNTHistory',  cdtOnly: false },
+          'Plan End NT':    { hist: 'planEndNTHistory',    cdtOnly: false },
+        };
+        rows.forEach(row => {
+          let floor = null;
+          if(row['Floor ID']) floor = floorById[row['Floor ID']];
+          if(!floor && row['Floor']) floor = floorByName[row['Floor']];
+          if(!floor){ notFound++; return; }
+          const aId = row['Area ID'];
+          let area = (floor.areas||[]).find(a => a.id === aId);
+          if(!area && row['Area Name']) area = (floor.areas||[]).find(a => a.name === row['Area Name']);
+          if(!area){ notFound++; return; }
+          // Trade is stored as "SHORT · Name" — match on the short prefix
+          const tradeRaw = String(row['Trade'] || '');
+          const tradeShort = tradeRaw.split('·')[0].trim();
+          const taskDef = TASKS.find(t => t.short === tradeShort) ||
+                          TASKS.find(t => tradeRaw.includes(t.name));
+          if(!taskDef) return;
+          const fieldInfo = fieldMap[String(row['Field']||'').trim()];
+          if(!fieldInfo) return;
+          // NT cannot edit history
+          if(!isCDT){ skippedHistory++; return; }
+          // Collect all "Rev N" columns in order
+          const revs = [];
+          Object.keys(row).forEach(k => {
+            const m = k.match(/^Rev\s+(\d+)$/i);
+            if(m){
+              const idx = parseInt(m[1], 10) - 1;
+              const val = row[k];
+              if(val !== undefined && val !== '') revs[idx] = normalizeDate(val);
+            }
+          });
+          ensureAreaTasks(area);
+          const td = area.tasks[taskDef.key];
+          td[fieldInfo.hist] = revs.filter(Boolean);
+        });
+      }
+
       // Prefer the ALL sheet (one row per area-of-floor)
       if(wb.SheetNames.includes('ALL')){
         const ws = wb.Sheets['ALL'];
-        const rows = XLSX.utils.sheet_to_json(ws, {raw:false});
+        const rows = readSheet(ws);
         rows.forEach(row => {
           const hit = findAreaForRow(row, null);
           if(!hit){ notFound++; return; }
@@ -4877,11 +5055,11 @@ function importExcel(e){
 
       // Per-floor sheets — sheet name matches a floor name (no Floor column needed)
       wb.SheetNames.forEach(sn => {
-        if(sn === 'ALL') return;
+        if(sn === 'ALL' || sn === 'Plan History') return;
         const sheetFloor = floorByName[sn];
         if(!sheetFloor) return;   // sheet doesn't map to a known floor; skip
         const ws = wb.Sheets[sn];
-        const rows = XLSX.utils.sheet_to_json(ws, {raw:false});
+        const rows = readSheet(ws);
         rows.forEach(row => {
           const hit = findAreaForRow(row, sheetFloor);
           if(!hit){ notFound++; return; }
