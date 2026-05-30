@@ -1176,7 +1176,7 @@
 <header>
   <div class="logo">SCM<span>·B14</span> PROGRESS</div>
   <div class="subtitle">Multi-Task<br>Construction Tracker</div>
-  <div style="font-size:11px;color:#000;background:var(--green);padding:3px 10px;border-radius:12px;font-weight:700;font-family:var(--font-mono)">v18 · CLEANUP</div>
+  <div style="font-size:11px;color:#000;background:var(--green);padding:3px 10px;border-radius:12px;font-weight:700;font-family:var(--font-mono)">v18.1 · FIX</div>
   <div class="toolbar">
     <button class="btn" id="loadImageBtn" title="Load floor plan (image or PDF) for the current floor">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg>
@@ -2714,7 +2714,9 @@ function init(){
     fitToScreen();
     render();
   };
-  floorImg.src = currentFloor().image || DEFAULT_IMG;
+  // If we don't have any floor yet (waiting for cloud), use a placeholder image
+  const cfBoot = currentFloor();
+  floorImg.src = (cfBoot && cfBoot.image) ? cfBoot.image : DEFAULT_IMG;
 
   // Mode buttons
   document.querySelectorAll('[data-mode]').forEach(b => {
