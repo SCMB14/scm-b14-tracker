@@ -1176,7 +1176,7 @@
 <header>
   <div class="logo">SCM<span>·B14</span> PROGRESS</div>
   <div class="subtitle">Multi-Task<br>Construction Tracker</div>
-  <div style="font-size:11px;color:#000;background:var(--green);padding:3px 10px;border-radius:12px;font-weight:700;font-family:var(--font-mono)">v18.1 · FIX</div>
+  <div style="font-size:11px;color:#000;background:var(--green);padding:3px 10px;border-radius:12px;font-weight:700;font-family:var(--font-mono)">v18.2 · DELETE FIX</div>
   <div class="toolbar">
     <button class="btn" id="loadImageBtn" title="Load floor plan (image or PDF) for the current floor">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg>
@@ -1295,6 +1295,7 @@
       </div>
       <button class="floor-btn wide" id="copyAreasBtn">📋 Copy areas to floors…</button>
       <button class="floor-btn wide" id="cleanupFloorsBtn" style="margin-top:6px;border-color:#ef4444;color:#ef4444">🧹 Cleanup empty floors</button>
+      <button class="floor-btn wide" id="reloadCloudBtn" style="margin-top:6px;border-color:#3b82f6;color:#3b82f6">🔄 Force reload from cloud</button>
       <div class="hint" style="margin-top:6px">Each floor keeps its own progress &amp; plan image. After "+ Add", use <b>Load Plan</b> (top bar) to upload an image or PDF for that floor. "Copy areas" copies only shapes (names &amp; outlines), not dates/%.</div>
     </div>
 
@@ -2374,7 +2375,8 @@ function duplicateFloor(){
   switchToFloor(copy.id);
 }
 
-function deleteFloor(){
+async function deleteFloor(){
+  if(!ROLE.isCDT()){ alert('Only CDT can delete floors.'); return; }
   if(STATE.floors.length <= 1){
     alert('You must keep at least one floor.');
     return;
@@ -2382,10 +2384,31 @@ function deleteFloor(){
   const f = currentFloor();
   if(!f) return;
   if(!confirm(`Delete floor "${f.name}" and all its data? This cannot be undone.`)) return;
+
   const idx = STATE.floors.findIndex(x => x.id === f.id);
+  const floorId = f.id;
+
+  // Remove from local state first
   STATE.floors.splice(idx, 1);
   const next = STATE.floors[Math.max(0, idx - 1)];
   switchToFloor(next.id);
+
+  // Remove from cloud — critical, otherwise the realtime listener brings the floor back
+  if(window.FB && window.FB.ready){
+    setCloudStatus('saving','Deleting floor…');
+    const { db, doc, deleteDoc, setDoc } = window.FB;
+    try{
+      await deleteDoc(doc(db,'projects', CLOUD.PROJECT_ID,'floors', floorId));
+      try{ await deleteDoc(doc(db,'projects', CLOUD.PROJECT_ID,'cdtPlan', floorId)); }catch(e){}
+      // Update meta so floorOrder no longer references it
+      await setDoc(doc(db,'projects', CLOUD.PROJECT_ID,'meta','main'), buildMetaDoc());
+      setCloudStatus('synced','Floor deleted');
+    } catch(err){
+      console.error(err);
+      setCloudStatus('error','Delete failed');
+      alert('Cloud delete failed: ' + err.message + '\nThe floor will reappear when the page reloads. Try again.');
+    }
+  }
 }
 
 // Copy only the SHAPES (points, name, labelOffset) of current floor's areas
@@ -2703,6 +2726,19 @@ function init(){
   $('delFloorBtn').addEventListener('click', deleteFloor);
   $('copyAreasBtn').addEventListener('click', copyAreasToFloors);
   $('cleanupFloorsBtn').addEventListener('click', cleanupEmptyFloors);
+  $('reloadCloudBtn').addEventListener('click', async () => {
+    if(!confirm('Discard any unsaved local changes and reload everything from the cloud?')) return;
+    // Unsubscribe and re-fetch
+    if(window.CLOUD){
+      CLOUD.unsubscribes.forEach(u => { try{ u(); }catch(e){} });
+      CLOUD.unsubscribes = [];
+    }
+    STATE.floors = [];
+    STATE.currentFloorId = null;
+    setCloudStatus('connecting','Reloading…');
+    const loaded = await cloudLoadAndSubscribe();
+    if(!loaded) setCloudStatus('error','Cloud empty');
+  });
 
   // Image load
   floorImg.onload = () => {
@@ -5214,7 +5250,7 @@ function updateRoleUI(){
 
 function applyRolePermissions(){
   const ntOnly = ROLE.isNT();
-  const hideForNT = ['cloudPushBtn','addFloorBtn','renameFloorBtn','dupFloorBtn','delFloorBtn','copyAreasBtn','cleanupFloorsBtn','loadImageBtn','clearImageBtn','loadBtn'];
+  const hideForNT = ['cloudPushBtn','addFloorBtn','renameFloorBtn','dupFloorBtn','delFloorBtn','copyAreasBtn','cleanupFloorsBtn','reloadCloudBtn','loadImageBtn','clearImageBtn','loadBtn'];
   hideForNT.forEach(id => { const el = $(id); if(el) el.style.display = ntOnly ? 'none' : ''; });
   const drawBtn = document.querySelector('[data-mode="draw"]');
   if(drawBtn) drawBtn.style.display = ntOnly ? 'none' : '';
