@@ -848,6 +848,19 @@
   }
   .role-badge .logout-x:hover{background:var(--red);color:#fff;border-color:var(--red)}
 
+  /* PLAN VIEW SWITCH (CDT only) */
+  .plan-view-switch{
+    display:flex;align-items:center;gap:6px;padding:4px 8px;border-radius:14px;
+    background:var(--panel-2);border:1px solid var(--border);
+  }
+  .pv-btn{
+    background:transparent;border:1px solid transparent;color:var(--muted);
+    padding:3px 8px;border-radius:10px;font-size:11px;cursor:pointer;
+    font-family:var(--font-mono);transition:background .15s,color .15s;
+  }
+  .pv-btn:hover{color:var(--text)}
+  .pv-btn.active{background:var(--accent);color:#000;border-color:var(--accent);font-weight:700}
+
   /* MODAL + DASHBOARD */
   .modal-overlay{
     display:none;position:fixed;inset:0;z-index:200;
@@ -1088,6 +1101,35 @@
     border-top:1px dashed var(--border);padding-top:14px;
   }
 
+  /* DUAL PLAN (CDT view shows both Plan CDT and Plan NT) */
+  .plan-dual-block{
+    background:var(--panel-2);border:1px solid var(--border);border-radius:8px;
+    padding:10px 12px;margin-bottom:10px;
+  }
+  .plan-dual-block:first-child{margin-top:0}
+  .plan-dual-header{
+    display:flex;justify-content:space-between;align-items:center;
+    font-size:11px;font-weight:600;letter-spacing:1px;color:var(--text);
+    margin-bottom:8px;text-transform:uppercase;
+  }
+  .plan-buffer-row{
+    font-size:11px;color:var(--muted);padding:6px 10px;background:var(--panel-2);
+    border-radius:6px;margin-bottom:10px;font-family:var(--font-mono);
+  }
+
+  /* SIDEBAR CARD DUAL PLAN */
+  .area-dates-dual{
+    display:flex;flex-direction:column;gap:6px;margin:6px 0;
+  }
+  .area-dates-dual .dual-row{
+    display:flex;justify-content:space-between;align-items:center;
+    font-size:11px;padding:4px 8px;background:var(--panel-2);border-radius:4px;
+  }
+  .area-dates-dual .dual-label{font-weight:600;font-family:var(--font-mono);font-size:10px}
+  .area-dates-dual .dual-cdt .dual-label{color:#c084fc}
+  .area-dates-dual .dual-nt .dual-label{color:#4ade80}
+  .area-dates-dual .dual-dates{color:var(--muted);font-family:var(--font-mono);font-size:10px}
+
   /* TOOLTIP */
   .tooltip{
     position:absolute;
@@ -1134,7 +1176,7 @@
 <header>
   <div class="logo">SCM<span>·B14</span> PROGRESS</div>
   <div class="subtitle">Multi-Task<br>Construction Tracker</div>
-  <div style="font-size:11px;color:#000;background:var(--green);padding:3px 10px;border-radius:12px;font-weight:700;font-family:var(--font-mono)">v16 · SECURE</div>
+  <div style="font-size:11px;color:#000;background:var(--green);padding:3px 10px;border-radius:12px;font-weight:700;font-family:var(--font-mono)">v17 · DUAL PLAN</div>
   <div class="toolbar">
     <button class="btn" id="loadImageBtn" title="Load floor plan (image or PDF) for the current floor">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg>
@@ -1180,6 +1222,11 @@
     <div class="role-badge" id="roleBadge" style="display:none">
       <span id="roleBadgeIcon">🏗</span><span id="roleBadgeText">NT</span>
       <button class="logout-x" id="logoutBtn" title="Đổi vai trò / đăng xuất">✕</button>
+    </div>
+    <div class="plan-view-switch" id="planViewSwitch" style="display:none" title="Plan dùng để tính Status / Dashboard / Label">
+      <span style="color:var(--muted);font-size:10px;letter-spacing:1px">VIEW:</span>
+      <button class="pv-btn active" data-pv="cdt">🏢 CĐT</button>
+      <button class="pv-btn" data-pv="nt">🏗 NT</button>
     </div>
     <button class="btn" id="cloudPushBtn" title="Upload the current state to the cloud (overwrites cloud copy)">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 16l-4-4-4 4"/><path d="M12 12v9"/><path d="M20.4 14.5A4 4 0 0 0 17 8h-1.3A8 8 0 1 0 4 16.3"/></svg>
@@ -2461,13 +2508,21 @@ const ROLE = {
   isNT(){ return this.current === 'nt'; },
 };
 
+// CDT-only: which plan is the ACTIVE one for computed things (status, dashboard,
+// labels, compare). NT never has a choice — they always see Plan NT.
+// 'cdt' or 'nt'. Defaults to 'cdt' (owner perspective).
+let PLAN_VIEW = 'cdt';
+function activePlan(){
+  return ROLE.isCDT() ? PLAN_VIEW : 'nt';
+}
+
 // Which plan fields the current view should read/write
 function planFields(){
-  if(ROLE.isCDT()){
+  if(activePlan() === 'cdt'){
     return {
       start:'planStartCDT', end:'planEndCDT',
       startHist:'planStartCDTHistory', endHist:'planEndCDTHistory',
-      label:'CĐT', // shown in UI
+      label:'CĐT',
     };
   }
   return {
@@ -2475,6 +2530,18 @@ function planFields(){
     startHist:'planStartNTHistory', endHist:'planEndNTHistory',
     label:'NT',
   };
+}
+
+// Read either plan explicitly (used when CDT needs to show BOTH).
+function taskPlanStartCDT(td){ return td ? (td.planStartCDT||'') : ''; }
+function taskPlanEndCDT(td){   return td ? (td.planEndCDT||'')   : ''; }
+function taskPlanStartNT(td){  return td ? (td.planStartNT||'')  : ''; }
+function taskPlanEndNT(td){    return td ? (td.planEndNT||'')    : ''; }
+// Buffer in days between CDT end and NT end (positive = CDT has buffer after NT)
+function planBufferDays(td){
+  const ne = td.planEndNT, ce = td.planEndCDT;
+  if(!ne || !ce) return null;
+  return diffDays(ce, ne);
 }
 
 // Read the ACTIVE plan dates (depends on current role).
@@ -3789,6 +3856,10 @@ function showTooltip(e, area){
         </div>`;
       return;
     }
+    const planRowHtml = ROLE.isCDT()
+      ? `<div class="row"><span>Plan CĐT:</span><span>${fmtDate(taskPlanStartCDT(td))} → ${fmtDate(taskPlanEndCDT(td))}</span></div>
+         <div class="row"><span>Plan NT:</span><span>${fmtDate(taskPlanStartNT(td))} → ${fmtDate(taskPlanEndNT(td))}</span></div>`
+      : `<div class="row"><span>Plan:</span><span>${fmtDate(taskPlanStart(td))} → ${fmtDate(taskPlanEnd(td))}</span></div>`;
     tasksHtml += `
       <div class="task-section">
         <div class="task-section-title">
@@ -3796,7 +3867,7 @@ function showTooltip(e, area){
           <span>${taskDef.name}</span>
           <span style="margin-left:auto;color:${ts.color};font-size:10px">${ts.label}</span>
         </div>
-        <div class="row"><span>Plan:</span><span>${fmtDate(taskPlanStart(td))} → ${fmtDate(taskPlanEnd(td))}</span></div>
+        ${planRowHtml}
         <div class="row"><span>Actual:</span><span>${fmtDate(td.actualStart)} → ${fmtDate(td.actualEnd)}</span></div>
         <div class="row"><span>Plan%/Act%:</span><span>${Math.round(calcPlanPercent(td))}% / ${Math.round(Number(td.percentActual)||0)}%</span></div>
       </div>`;
@@ -4048,11 +4119,11 @@ function renderAreaCard(area){
       </div>
       <div class="area-dates">
         <div class="date-field">
-          <label>Plan Start</label>
+          <label>Plan Start ${ROLE.isCDT() ? '<span style="font-size:9px;color:var(--muted)">('+planFields().label+')</span>' : ''}</label>
           <input type="date" data-field="planStart" value="${taskPlanStart(td)||''}">
         </div>
         <div class="date-field">
-          <label>Plan End</label>
+          <label>Plan End ${ROLE.isCDT() ? '<span style="font-size:9px;color:var(--muted)">('+planFields().label+')</span>' : ''}</label>
           <input type="date" data-field="planEnd" value="${taskPlanEnd(td)||''}">
         </div>
         <div class="date-field">
@@ -4064,6 +4135,19 @@ function renderAreaCard(area){
           <input type="date" data-field="actualEnd" value="${td.actualEnd||''}">
         </div>
       </div>
+      ${ROLE.isCDT() ? (()=>{
+        const otherIsCDT = activePlan() !== 'cdt';
+        const otherStart = otherIsCDT ? taskPlanStartCDT(td) : taskPlanStartNT(td);
+        const otherEnd   = otherIsCDT ? taskPlanEndCDT(td)   : taskPlanEndNT(td);
+        const otherLabel = otherIsCDT ? '🏢 CĐT' : '🏗 NT';
+        const otherCls   = otherIsCDT ? 'dual-cdt' : 'dual-nt';
+        const buf = planBufferDays(td);
+        const bufTxt = (buf===null) ? '' : ` · buffer ${buf>0?'+':''}${buf}d`;
+        return `<div class="area-dates-dual"><div class="dual-row ${otherCls}">
+            <span class="dual-label">${otherLabel}</span>
+            <span class="dual-dates">${fmtDate(otherStart)} → ${fmtDate(otherEnd)}${bufTxt}</span>
+          </div></div>`;
+      })() : ''}
       <div class="revisions-box">${buildRevisionsHtml(td)}</div>
       <div class="area-progress">
         <div class="progress-field">
@@ -4147,20 +4231,56 @@ function renderDetailPanel(){
     </div>
 
     <div id="tradeFields" style="${td.na ? 'opacity:0.4;pointer-events:none' : ''}">
-      <div class="detail-section-label" style="border-top:none;padding-top:0;margin-top:0">Plan Dates</div>
-      <div class="detail-grid-2">
-        <div class="detail-field">
-          <label>Plan Start</label>
-          <input type="date" data-dfield="planStart" value="${taskPlanStart(td)||''}">
+      ${ROLE.isCDT() ? `
+        <div class="plan-dual-block">
+          <div class="plan-dual-header">
+            <span>🏢 Plan CĐT</span>
+            <span style="color:var(--muted);font-weight:400;font-size:10px">có buffer</span>
+          </div>
+          <div class="detail-grid-2">
+            <div class="detail-field">
+              <label>Plan Start</label>
+              <input type="date" data-dfield="planStartCDT" value="${taskPlanStartCDT(td)||''}">
+            </div>
+            <div class="detail-field">
+              <label>Plan End</label>
+              <input type="date" data-dfield="planEndCDT" value="${taskPlanEndCDT(td)||''}">
+            </div>
+          </div>
         </div>
-        <div class="detail-field">
-          <label>Plan End</label>
-          <input type="date" data-dfield="planEnd" value="${taskPlanEnd(td)||''}">
+        <div class="plan-dual-block">
+          <div class="plan-dual-header">
+            <span>🏗 Plan NT</span>
+            <span style="color:var(--muted);font-weight:400;font-size:10px">deadline NT thấy</span>
+          </div>
+          <div class="detail-grid-2">
+            <div class="detail-field">
+              <label>Plan Start</label>
+              <input type="date" data-dfield="planStartNT" value="${taskPlanStartNT(td)||''}">
+            </div>
+            <div class="detail-field">
+              <label>Plan End</label>
+              <input type="date" data-dfield="planEndNT" value="${taskPlanEndNT(td)||''}">
+            </div>
+          </div>
         </div>
-      </div>
+        ${(()=>{const b=planBufferDays(td); if(b===null) return ''; const sign=b>0?'+':''; const col=b>0?'#22c55e':(b<0?'#ef4444':'var(--muted)'); return `<div class="plan-buffer-row">Buffer (CĐT − NT): <b style="color:${col}">${sign}${b} ngày</b></div>`;})()}
+      ` : `
+        <div class="detail-section-label" style="border-top:none;padding-top:0;margin-top:0">Plan Dates (NT)</div>
+        <div class="detail-grid-2">
+          <div class="detail-field">
+            <label>Plan Start</label>
+            <input type="date" data-dfield="planStart" value="${taskPlanStart(td)||''}">
+          </div>
+          <div class="detail-field">
+            <label>Plan End</label>
+            <input type="date" data-dfield="planEnd" value="${taskPlanEnd(td)||''}">
+          </div>
+        </div>
+      `}
       <div class="detail-revisions" id="detailRevisions">${buildRevisionsHtml(td)}</div>
 
-      <div class="detail-section-label">Actual Dates</div>
+      <div class="detail-section-label">Actual Dates <span style="color:var(--muted);font-weight:400;font-size:10px">(shared)</span></div>
       <div class="detail-grid-2">
         <div class="detail-field">
           <label>Actual Start</label>
@@ -4221,33 +4341,51 @@ function wireDetailInputs(area){
         td[planFields().start] = inp.value;
       } else if(f === 'planEnd'){
         td[planFields().end] = inp.value;
+      } else if(f === 'planStartCDT' || f === 'planEndCDT' || f === 'planStartNT' || f === 'planEndNT'){
+        // Explicit CDT/NT field (CDT view shows both)
+        td[f] = inp.value;
       } else {
         td[f] = inp.value;
       }
-      // live update everything that depends on it, WITHOUT rebuilding inputs
       updateDetailReadouts(area);
       renderCanvasOnly();
       renderStats();
       updateTaskCounts();
-      // keep sidebar list in sync (rebuild is fine — focus stays in panel)
       refreshSidebarCardQuietly(area);
+      // refresh buffer line live
+      const bufRow = body.querySelector('.plan-buffer-row');
+      if(bufRow){
+        const b = planBufferDays(td);
+        if(b === null){ bufRow.style.display = 'none'; }
+        else{
+          const sign = b > 0 ? '+' : '';
+          const col = b > 0 ? '#22c55e' : (b < 0 ? '#ef4444' : 'var(--muted)');
+          bufRow.innerHTML = `Buffer (CĐT − NT): <b style="color:${col}">${sign}${b} ngày</b>`;
+          bufRow.style.display = '';
+        }
+      }
     });
 
     inp.addEventListener('change', () => {
       const f = inp.dataset.dfield;
-      if((f === 'planStart' || f === 'planEnd')){
-        const td = area.tasks[STATE.detailTab];
-        const prev = inp.dataset.prev || '';
-        const now = inp.value;
-        if(prev && prev !== now){
-          const histKey = (f === 'planStart') ? planFields().startHist : planFields().endHist;
-          (td[histKey] = td[histKey] || []).push(prev);
-          const rev = $('detailRevisions');
-          if(rev) rev.innerHTML = buildRevisionsHtml(td);
-        }
-        inp.dataset.prev = now;
-        renderCanvasOnly();
+      const td = area.tasks[STATE.detailTab];
+      const prev = inp.dataset.prev || '';
+      const now = inp.value;
+      // Determine which history list to push to, if any
+      let histKey = null;
+      if(f === 'planStart')        histKey = planFields().startHist;
+      else if(f === 'planEnd')     histKey = planFields().endHist;
+      else if(f === 'planStartCDT') histKey = 'planStartCDTHistory';
+      else if(f === 'planEndCDT')   histKey = 'planEndCDTHistory';
+      else if(f === 'planStartNT')  histKey = 'planStartNTHistory';
+      else if(f === 'planEndNT')    histKey = 'planEndNTHistory';
+      if(histKey && prev && prev !== now){
+        (td[histKey] = td[histKey] || []).push(prev);
+        const rev = $('detailRevisions');
+        if(rev) rev.innerHTML = buildRevisionsHtml(td);
       }
+      inp.dataset.prev = now;
+      if(histKey) renderCanvasOnly();
     });
   });
 
@@ -5025,6 +5163,12 @@ function applyRolePermissions(){
   if(drawBtn) drawBtn.style.display = ntOnly ? 'none' : '';
   document.body.classList.toggle('role-nt', ntOnly);
   document.body.classList.toggle('role-cdt', !ntOnly);
+  // Plan view switch only visible to CDT
+  const pv = $('planViewSwitch');
+  if(pv) pv.style.display = ROLE.isCDT() ? '' : 'none';
+  // Force NT to use NT plan view; CDT defaults to CDT
+  if(ntOnly) PLAN_VIEW = 'nt';
+  else if(!PLAN_VIEW) PLAN_VIEW = 'cdt';
 }
 
 function showLoginModal(){
@@ -5113,6 +5257,19 @@ function boot(){
   $('roleCDTSubmit').addEventListener('click', submitCDT);
   $('roleCDTPwd').addEventListener('keydown', e => { if(e.key === 'Enter') submitCDT(); });
   $('logoutBtn').addEventListener('click', logoutAndReask);
+
+  // Plan view switch (CDT only)
+  document.querySelectorAll('#planViewSwitch .pv-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const pv = btn.dataset.pv;
+      if(pv === PLAN_VIEW) return;
+      PLAN_VIEW = pv;
+      document.querySelectorAll('#planViewSwitch .pv-btn').forEach(b => b.classList.toggle('active', b.dataset.pv === pv));
+      // re-render with the new plan as the basis for computed things
+      __originalRender();   // skip cloud save
+      renderDetailPanel();
+    });
+  });
 
   // Wire push button (CDT only — also enforced server-side)
   $('cloudPushBtn').addEventListener('click', () => {
