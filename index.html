@@ -1176,7 +1176,7 @@
 <header>
   <div class="logo">SCM<span>·B14</span> PROGRESS</div>
   <div class="subtitle">Multi-Task<br>Construction Tracker</div>
-  <div style="font-size:11px;color:#000;background:var(--green);padding:3px 10px;border-radius:12px;font-weight:700;font-family:var(--font-mono)">v19 · EXCEL ALL</div>
+  <div style="font-size:11px;color:#000;background:var(--green);padding:3px 10px;border-radius:12px;font-weight:700;font-family:var(--font-mono)">v20</div>
   <div class="toolbar">
     <button class="btn" id="loadImageBtn" title="Load floor plan (image or PDF) for the current floor">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg>
@@ -1956,6 +1956,21 @@ function exportFloorPNG(){
   svgClone.setAttribute('xmlns','http://www.w3.org/2000/svg');
   svgClone.setAttribute('width', w);
   svgClone.setAttribute('height', h);
+
+  // The cloned SVG loses CSS from the page stylesheet, so when rasterized the
+  // polygons render at fill-opacity:1 (fully opaque), covering the drawing
+  // underneath. Inject the same style rules used on screen so the PNG looks
+  // identical to the display — slightly above display so labels stay legible.
+  const styleEl = document.createElementNS('http://www.w3.org/2000/svg', 'style');
+  styleEl.textContent = `
+    .polygon-shape{ fill-opacity:0.5; stroke-width:2; }
+    .polygon-shape.selected{ stroke-width:3; fill-opacity:0.55; }
+    .vertex-handle{ display:none; }
+    .polygon-point{ display:none; }
+    .polygon-temp{ display:none; }
+  `;
+  svgClone.insertBefore(styleEl, svgClone.firstChild);
+
   const svgStr = new XMLSerializer().serializeToString(svgClone);
   const img = new Image();
   const svgBlob = new Blob([svgStr], {type:'image/svg+xml;charset=utf-8'});
@@ -2952,6 +2967,12 @@ function setupAreaListDelegation(){
     const clearBtn = e.target.closest('[data-clearhist]');
     if(clearBtn){
       e.stopPropagation();
+      // Only CDT can erase the contractor's plan revisions. NT must keep all
+      // their own previous commitments visible (and CDT's too).
+      if(!ROLE.isCDT()){
+        alert('Chỉ Chủ đầu tư (CĐT) mới được xóa lịch sử plan.\nNhà thầu có thể nhập plan mới — plan cũ sẽ tự động lưu vào lịch sử.');
+        return;
+      }
       const area = findAreaFromEvent(e);
       if(area && STATE.currentTask !== '__all__'){
         ensureAreaTasks(area);
@@ -4101,17 +4122,21 @@ function buildRevisionsHtml(td){
   let html = '';
   if(startH.length || endH.length){
     html += `<div class="rev-title">Plan revisions <span style="opacity:.6">(${planFields().label} — old crossed out)</span></div>`;
+    // Only CDT sees the × clear-history buttons. NT keeps all revisions visible.
+    const canClear = ROLE.isCDT();
     if(startH.length){
       html += '<div class="rev-line"><span class="rev-lbl">Start:</span> ';
       html += startH.map(d => `<s>${fmtDate(d)}</s>`).join(' → ');
       html += ` → <b>${fmtDate(taskPlanStart(td))}</b>`;
-      html += ` <button class="rev-clear" data-clearhist="planStart" title="Clear start history">×</button></div>`;
+      if(canClear) html += ` <button class="rev-clear" data-clearhist="planStart" title="Clear start history">×</button>`;
+      html += `</div>`;
     }
     if(endH.length){
       html += '<div class="rev-line"><span class="rev-lbl">End:</span> ';
       html += endH.map(d => `<s>${fmtDate(d)}</s>`).join(' → ');
       html += ` → <b>${fmtDate(taskPlanEnd(td))}</b>`;
-      html += ` <button class="rev-clear" data-clearhist="planEnd" title="Clear end history">×</button></div>`;
+      if(canClear) html += ` <button class="rev-clear" data-clearhist="planEnd" title="Clear end history">×</button>`;
+      html += `</div>`;
     }
   }
   return html;
@@ -4486,6 +4511,11 @@ function wireDetailInputs(area){
   body.querySelectorAll('[data-clearhist]').forEach(btn => {
     btn.addEventListener('click', e => {
       e.stopPropagation();
+      // NT can never delete plan history — old commitments must stay visible
+      if(!ROLE.isCDT()){
+        alert('Chỉ Chủ đầu tư (CĐT) mới được xóa lịch sử plan.\nNhà thầu có thể nhập plan mới — plan cũ sẽ tự động lưu vào lịch sử.');
+        return;
+      }
       const td = area.tasks[STATE.detailTab];
       const which = btn.dataset.clearhist; // 'planStart' or 'planEnd'
       const histKey = (which === 'planStart') ? planFields().startHist : planFields().endHist;
@@ -4686,10 +4716,26 @@ function importExcel(e){
         floorByName[fl.name] = fl;
       });
 
-      let updated = 0, notFound = 0, skippedCDT = 0;
+      let updated = 0, notFound = 0, skippedCDT = 0, renamed = 0, skippedHistory = 0;
 
       const applyRowToArea = (row, area, floor) => {
         ensureAreaTasks(area);
+
+        // === AREA RENAME via Excel ===
+        // If the row's Area Name differs from the current name AND we matched
+        // this area by ID (so we're certain it's the same area, not a name
+        // collision), rename the area to whatever Excel says.
+        // This lets the user mass-edit area names by changing the "Area Name"
+        // column in the exported sheet and re-importing.
+        const newName = row['Area Name'];
+        if(newName !== undefined && String(newName).trim() !== ''){
+          const trimmed = String(newName).trim();
+          if(area.id === row['Area ID'] && trimmed !== area.name){
+            area.name = trimmed;
+            renamed++;
+          }
+        }
+
         TASKS.forEach(t => {
           const td = area.tasks[t.key];
           // N/A flag
@@ -4709,11 +4755,31 @@ function importExcel(e){
             if(isCDT) td.planEndCDT = normalizeDate(peCDT);
             else skippedCDT++;
           }
-          // Plan NT
+          // Plan NT — when value changes, push old value to history so the
+          // contractor's plan revisions are preserved. NT cannot wipe out a
+          // previous commitment by simply re-importing a new spreadsheet —
+          // every dated change accumulates into planStart/EndNTHistory and
+          // only CDT can clear it (via the × button in the panel/sidebar).
           const psNT = row[`${t.short} Plan Start NT`];
           const peNT = row[`${t.short} Plan End NT`];
-          if(psNT !== undefined && psNT !== '') td.planStartNT = normalizeDate(psNT);
-          if(peNT !== undefined && peNT !== '') td.planEndNT   = normalizeDate(peNT);
+          if(psNT !== undefined && psNT !== ''){
+            const next = normalizeDate(psNT);
+            const old = td.planStartNT || '';
+            if(old && old !== next){
+              td.planStartNTHistory = Array.isArray(td.planStartNTHistory) ? td.planStartNTHistory : [];
+              td.planStartNTHistory.push(old);
+            }
+            td.planStartNT = next;
+          }
+          if(peNT !== undefined && peNT !== ''){
+            const next = normalizeDate(peNT);
+            const old = td.planEndNT || '';
+            if(old && old !== next){
+              td.planEndNTHistory = Array.isArray(td.planEndNTHistory) ? td.planEndNTHistory : [];
+              td.planEndNTHistory.push(old);
+            }
+            td.planEndNT = next;
+          }
           // Actual dates
           const aS = row[`${t.short} Actual Start`];
           const aE = row[`${t.short} Actual End`];
@@ -4768,6 +4834,8 @@ function importExcel(e){
       });
 
       let msg = `Import complete.\nRows applied: ${updated}\nNot matched: ${notFound}`;
+      if(renamed) msg += `\nAreas renamed: ${renamed}`;
+      if(skippedHistory) msg += `\nOld plan-NT history protected (kept): ${skippedHistory}`;
       if(skippedCDT) msg += `\nPlan CDT cells skipped (NT cannot write): ${skippedCDT}`;
       alert(msg);
       render();
