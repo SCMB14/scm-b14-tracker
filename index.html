@@ -1176,7 +1176,7 @@
 <header>
   <div class="logo">SCM<span>·B14</span> PROGRESS</div>
   <div class="subtitle">Multi-Task<br>Construction Tracker</div>
-  <div style="font-size:11px;color:#000;background:var(--green);padding:3px 10px;border-radius:12px;font-weight:700;font-family:var(--font-mono)">v18.2 · DELETE FIX</div>
+  <div style="font-size:11px;color:#000;background:var(--green);padding:3px 10px;border-radius:12px;font-weight:700;font-family:var(--font-mono)">v19 · EXCEL ALL</div>
   <div class="toolbar">
     <button class="btn" id="loadImageBtn" title="Load floor plan (image or PDF) for the current floor">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg>
@@ -4569,126 +4569,207 @@ function renderStats(){
    EXCEL EXPORT/IMPORT - MULTI-SHEET (one per task) + ALL sheet
 ============================================================= */
 function exportExcel(){
-  if(STATE.areas.length === 0){
-    alert('No areas to export. Draw some areas first.');
+  const totalAreas = STATE.floors.reduce((s,f) => s + (f.areas||[]).length, 0);
+  if(totalAreas === 0){
+    alert('No areas to export across any floor.');
     return;
   }
+  const includeCDT = ROLE.isCDT();   // NT export skips Plan CDT columns entirely
   const wb = XLSX.utils.book_new();
 
-  // "ALL" overview sheet
-  const allRows = STATE.areas.map((a, i) => {
-    ensureAreaTasks(a);
-    const row = {'No.': i+1, 'Area ID': a.id, 'Area Name': a.name};
-    TASKS.forEach(t => {
-      const td = a.tasks[t.key];
-      row[`${t.short} N/A`] = td.na ? 'YES' : '';
-      row[`${t.short} Plan Start`] = taskPlanStart(td) || '';
-      row[`${t.short} Plan End`] = taskPlanEnd(td) || '';
-      row[`${t.short} Actual Start`] = td.actualStart || '';
-      row[`${t.short} Actual End`] = td.actualEnd || '';
-      row[`${t.short} Plan %`] = Math.round(calcPlanPercent(td));
-      row[`${t.short} Actual %`] = Number(td.percentActual)||0;
-      row[`${t.short} Status`] = calcTaskStatus(td).label;
+  // ---------- ALL sheet ----------
+  const allRows = [];
+  let counter = 1;
+  STATE.floors.forEach(f => {
+    (f.areas||[]).forEach(a => {
+      ensureAreaTasks(a);
+      const row = {
+        'No.': counter++,
+        'Floor': f.name,
+        'Floor ID': f.id,
+        'Area ID': a.id,
+        'Area Name': a.name,
+      };
+      TASKS.forEach(t => {
+        const td = a.tasks[t.key];
+        row[`${t.short} N/A`] = td.na ? 'YES' : '';
+        if(includeCDT){
+          row[`${t.short} Plan Start CDT`] = td.planStartCDT || '';
+          row[`${t.short} Plan End CDT`]   = td.planEndCDT   || '';
+        }
+        row[`${t.short} Plan Start NT`] = td.planStartNT || '';
+        row[`${t.short} Plan End NT`]   = td.planEndNT   || '';
+        row[`${t.short} Actual Start`] = td.actualStart || '';
+        row[`${t.short} Actual End`]   = td.actualEnd   || '';
+        row[`${t.short} Actual %`]     = Number(td.percentActual)||0;
+      });
+      allRows.push(row);
     });
-    return row;
   });
   const wsAll = XLSX.utils.json_to_sheet(allRows);
-  // wide columns
-  wsAll['!cols'] = [{wch:5},{wch:28},{wch:22}, ...TASKS.flatMap(()=>[{wch:6},{wch:11},{wch:11},{wch:11},{wch:11},{wch:9},{wch:10},{wch:12}])];
+  wsAll['!cols'] = [
+    {wch:5},{wch:8},{wch:22},{wch:22},{wch:22},
+    ...TASKS.flatMap(()=>{
+      const widths = [{wch:5}];
+      if(includeCDT) widths.push({wch:12},{wch:12});
+      widths.push({wch:12},{wch:12});
+      widths.push({wch:12},{wch:12});
+      widths.push({wch:10});
+      return widths;
+    }),
+  ];
   XLSX.utils.book_append_sheet(wb, wsAll, 'ALL');
 
-  // One sheet per task
-  TASKS.forEach(t => {
-    const rows = STATE.areas.map((a, i) => {
+  // ---------- One sheet per FLOOR ----------
+  STATE.floors.forEach(f => {
+    if((f.areas||[]).length === 0) return;
+    const rows = (f.areas||[]).map((a, i) => {
       ensureAreaTasks(a);
-      const td = a.tasks[t.key];
-      return {
+      const row = {
         'No.': i+1,
         'Area ID': a.id,
         'Area Name': a.name,
-        'N/A': td.na ? 'YES' : '',
-        'Plan Start': taskPlanStart(td) || '',
-        'Plan End': taskPlanEnd(td) || '',
-        'Actual Start': td.actualStart || '',
-        'Actual End': td.actualEnd || '',
-        'Plan % (auto)': Math.round(calcPlanPercent(td)),
-        'Actual % (manual)': Number(td.percentActual)||0,
-        'Status (auto)': calcTaskStatus(td).label,
-        'Plan Start Revisions': (td.planStartHistory||[]).join(' | '),
-        'Plan End Revisions': (td.planEndHistory||[]).join(' | '),
       };
+      TASKS.forEach(t => {
+        const td = a.tasks[t.key];
+        row[`${t.short} N/A`] = td.na ? 'YES' : '';
+        if(includeCDT){
+          row[`${t.short} Plan Start CDT`] = td.planStartCDT || '';
+          row[`${t.short} Plan End CDT`]   = td.planEndCDT   || '';
+        }
+        row[`${t.short} Plan Start NT`] = td.planStartNT || '';
+        row[`${t.short} Plan End NT`]   = td.planEndNT   || '';
+        row[`${t.short} Actual Start`]  = td.actualStart || '';
+        row[`${t.short} Actual End`]    = td.actualEnd   || '';
+        row[`${t.short} Actual %`]      = Number(td.percentActual)||0;
+      });
+      return row;
     });
     const ws = XLSX.utils.json_to_sheet(rows);
-    ws['!cols'] = [{wch:5},{wch:28},{wch:22},{wch:6},{wch:12},{wch:12},{wch:12},{wch:12},{wch:14},{wch:18},{wch:14},{wch:24},{wch:24}];
-    XLSX.utils.book_append_sheet(wb, ws, t.short + ' - ' + t.name.slice(0,20));
+    ws['!cols'] = [
+      {wch:5},{wch:22},{wch:22},
+      ...TASKS.flatMap(()=>{
+        const widths = [{wch:5}];
+        if(includeCDT) widths.push({wch:12},{wch:12});
+        widths.push({wch:12},{wch:12});
+        widths.push({wch:12},{wch:12});
+        widths.push({wch:10});
+        return widths;
+      }),
+    ];
+    let sheetName = (f.name || 'Floor').replace(/[\[\]\/\\?*]/g,'').slice(0,31);
+    let n = 1;
+    while(wb.SheetNames.includes(sheetName)){ sheetName = (f.name + '-' + (++n)).slice(0,31); }
+    XLSX.utils.book_append_sheet(wb, ws, sheetName);
   });
 
-  const cf = currentFloor();
-  const floorTag = cf ? cf.name.replace(/[^\w]+/g,'-') : 'Floor';
-  const fname = `SCM-B14-${floorTag}-${new Date().toISOString().slice(0,10)}.xlsx`;
+  const roleTag = ROLE.isCDT() ? 'CDT' : 'NT';
+  const fname = `SCM-B14-${roleTag}-${new Date().toISOString().slice(0,10)}.xlsx`;
   XLSX.writeFile(wb, fname);
 }
 
 function importExcel(e){
   const f = e.target.files[0];
   if(!f) return;
+  const isCDT = ROLE.isCDT();
   const r = new FileReader();
   r.onload = ev => {
     try{
       const data = new Uint8Array(ev.target.result);
       const wb = XLSX.read(data, {type:'array', cellDates:true});
 
-      let updated=0, notFound=0;
-
-      // Try to read per-task sheets first
-      TASKS.forEach(t => {
-        const sheetName = wb.SheetNames.find(s => s.startsWith(t.short + ' '));
-        if(!sheetName) return;
-        const ws = wb.Sheets[sheetName];
-        const rows = XLSX.utils.sheet_to_json(ws, {raw:false});
-        rows.forEach(row => {
-          const id = row['Area ID'];
-          const name = row['Area Name'];
-          let area = STATE.areas.find(a => a.id === id) || STATE.areas.find(a => a.name === name);
-          if(!area){ notFound++; return; }
-          ensureAreaTasks(area);
-          const td = area.tasks[t.key];
-          if(row['N/A'] !== undefined) td.na = /^(yes|y|true|1|na|n\/a)$/i.test(String(row['N/A']).trim());
-          if(row['Plan Start']) taskPlanStart(td) = normalizeDate(row['Plan Start']);
-          if(row['Plan End']) taskPlanEnd(td) = normalizeDate(row['Plan End']);
-          if(row['Actual Start']) td.actualStart = normalizeDate(row['Actual Start']);
-          if(row['Actual End']) td.actualEnd = normalizeDate(row['Actual End']);
-          if(row['Actual % (manual)'] !== undefined && row['Actual % (manual)'] !== '')
-            td.percentActual = Math.max(0, Math.min(100, Number(row['Actual % (manual)'])||0));
-          updated++;
-        });
+      // Build lookup: floorByName, floorById, areaById global, areaByName per floor
+      const floorById = {};
+      const floorByName = {};
+      STATE.floors.forEach(fl => {
+        floorById[fl.id] = fl;
+        floorByName[fl.name] = fl;
       });
 
-      // Also try the ALL sheet (with task short prefix columns)
-      if(updated === 0 && wb.SheetNames.includes('ALL')){
+      let updated = 0, notFound = 0, skippedCDT = 0;
+
+      const applyRowToArea = (row, area, floor) => {
+        ensureAreaTasks(area);
+        TASKS.forEach(t => {
+          const td = area.tasks[t.key];
+          // N/A flag
+          const naCell = row[`${t.short} N/A`];
+          if(naCell !== undefined && naCell !== ''){
+            td.na = /^(yes|y|true|1|na|n\/a)$/i.test(String(naCell).trim());
+          }
+          // Plan dates — CDT only can write CDT columns; NT cells ignored from NT files? No,
+          // both roles can write Plan NT. Only CDT can write Plan CDT.
+          const psCDT = row[`${t.short} Plan Start CDT`];
+          const peCDT = row[`${t.short} Plan End CDT`];
+          if(psCDT !== undefined && psCDT !== ''){
+            if(isCDT) td.planStartCDT = normalizeDate(psCDT);
+            else skippedCDT++;
+          }
+          if(peCDT !== undefined && peCDT !== ''){
+            if(isCDT) td.planEndCDT = normalizeDate(peCDT);
+            else skippedCDT++;
+          }
+          // Plan NT
+          const psNT = row[`${t.short} Plan Start NT`];
+          const peNT = row[`${t.short} Plan End NT`];
+          if(psNT !== undefined && psNT !== '') td.planStartNT = normalizeDate(psNT);
+          if(peNT !== undefined && peNT !== '') td.planEndNT   = normalizeDate(peNT);
+          // Actual dates
+          const aS = row[`${t.short} Actual Start`];
+          const aE = row[`${t.short} Actual End`];
+          if(aS !== undefined && aS !== '') td.actualStart = normalizeDate(aS);
+          if(aE !== undefined && aE !== '') td.actualEnd   = normalizeDate(aE);
+          // Actual %
+          const ap = row[`${t.short} Actual %`];
+          if(ap !== undefined && ap !== '')
+            td.percentActual = Math.max(0, Math.min(100, Number(ap)||0));
+        });
+      };
+
+      const findAreaForRow = (row, sheetFloor) => {
+        // 1) If row has Floor ID, prefer it; else Floor name; else fall back to sheet's floor
+        let floor = null;
+        if(row['Floor ID']) floor = floorById[row['Floor ID']];
+        if(!floor && row['Floor']) floor = floorByName[row['Floor']];
+        if(!floor) floor = sheetFloor;
+        if(!floor) return null;
+        const aId = row['Area ID'];
+        const aName = row['Area Name'];
+        let area = (floor.areas||[]).find(a => a.id === aId);
+        if(!area && aName) area = (floor.areas||[]).find(a => a.name === aName);
+        return area ? {area, floor} : null;
+      };
+
+      // Prefer the ALL sheet (one row per area-of-floor)
+      if(wb.SheetNames.includes('ALL')){
         const ws = wb.Sheets['ALL'];
         const rows = XLSX.utils.sheet_to_json(ws, {raw:false});
         rows.forEach(row => {
-          const id = row['Area ID'];
-          const name = row['Area Name'];
-          let area = STATE.areas.find(a => a.id === id) || STATE.areas.find(a => a.name === name);
-          if(!area){ notFound++; return; }
-          ensureAreaTasks(area);
-          TASKS.forEach(t => {
-            const td = area.tasks[t.key];
-            if(row[`${t.short} N/A`] !== undefined) td.na = /^(yes|y|true|1|na|n\/a)$/i.test(String(row[`${t.short} N/A`]).trim());
-            if(row[`${t.short} Plan Start`]) taskPlanStart(td) = normalizeDate(row[`${t.short} Plan Start`]);
-            if(row[`${t.short} Plan End`]) taskPlanEnd(td) = normalizeDate(row[`${t.short} Plan End`]);
-            if(row[`${t.short} Actual Start`]) td.actualStart = normalizeDate(row[`${t.short} Actual Start`]);
-            if(row[`${t.short} Actual End`]) td.actualEnd = normalizeDate(row[`${t.short} Actual End`]);
-            if(row[`${t.short} Actual %`] !== undefined && row[`${t.short} Actual %`] !== '')
-              td.percentActual = Math.max(0, Math.min(100, Number(row[`${t.short} Actual %`])||0));
-          });
+          const hit = findAreaForRow(row, null);
+          if(!hit){ notFound++; return; }
+          applyRowToArea(row, hit.area, hit.floor);
           updated++;
         });
       }
 
-      alert(`Import complete!\nUpdated rows: ${updated}\nNot matched: ${notFound}`);
+      // Per-floor sheets — sheet name matches a floor name (no Floor column needed)
+      wb.SheetNames.forEach(sn => {
+        if(sn === 'ALL') return;
+        const sheetFloor = floorByName[sn];
+        if(!sheetFloor) return;   // sheet doesn't map to a known floor; skip
+        const ws = wb.Sheets[sn];
+        const rows = XLSX.utils.sheet_to_json(ws, {raw:false});
+        rows.forEach(row => {
+          const hit = findAreaForRow(row, sheetFloor);
+          if(!hit){ notFound++; return; }
+          applyRowToArea(row, hit.area, hit.floor);
+          updated++;
+        });
+      });
+
+      let msg = `Import complete.\nRows applied: ${updated}\nNot matched: ${notFound}`;
+      if(skippedCDT) msg += `\nPlan CDT cells skipped (NT cannot write): ${skippedCDT}`;
+      alert(msg);
       render();
       if($('detailPanel').classList.contains('show')) renderDetailPanel();
     } catch(err){
