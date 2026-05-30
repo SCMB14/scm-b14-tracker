@@ -818,6 +818,19 @@
     padding:6px 12px;border-radius:14px;background:var(--panel-2);
     border:1px solid var(--border);font-size:11px;color:var(--muted);
     font-family:var(--font-mono);
+    /* Reserve enough width for the longest common state ("Synced HH:MM")
+       so the toolbar buttons don't jitter every time the text cycles
+       between "Saving…", "Synced 14:32", "Live", etc. */
+    min-width:140px;
+    max-width:240px;
+    justify-content:flex-start;
+    white-space:nowrap;
+    overflow:hidden;
+  }
+  .cloud-status #cloudText{
+    overflow:hidden;
+    text-overflow:ellipsis;
+    flex:1;
   }
   .cloud-dot{width:8px;height:8px;border-radius:50%;background:#5b6470;flex-shrink:0;transition:background .2s}
   .cloud-dot.connecting{background:#eab308;animation:pulse 1.2s infinite}
@@ -4622,13 +4635,18 @@ function exportExcel(){
       };
       TASKS.forEach(t => {
         const td = a.tasks[t.key];
+        const histToStr = arr => Array.isArray(arr) && arr.length ? arr.join(' | ') : '';
         row[`${t.short} N/A`] = td.na ? 'YES' : '';
         if(includeCDT){
-          row[`${t.short} Plan Start CDT`] = td.planStartCDT || '';
-          row[`${t.short} Plan End CDT`]   = td.planEndCDT   || '';
+          row[`${t.short} Plan Start CDT`]      = td.planStartCDT || '';
+          row[`${t.short} Plan Start CDT Hist`] = histToStr(td.planStartCDTHistory);
+          row[`${t.short} Plan End CDT`]        = td.planEndCDT   || '';
+          row[`${t.short} Plan End CDT Hist`]   = histToStr(td.planEndCDTHistory);
         }
-        row[`${t.short} Plan Start NT`] = td.planStartNT || '';
-        row[`${t.short} Plan End NT`]   = td.planEndNT   || '';
+        row[`${t.short} Plan Start NT`]      = td.planStartNT || '';
+        row[`${t.short} Plan Start NT Hist`] = histToStr(td.planStartNTHistory);
+        row[`${t.short} Plan End NT`]        = td.planEndNT   || '';
+        row[`${t.short} Plan End NT Hist`]   = histToStr(td.planEndNTHistory);
         row[`${t.short} Actual Start`] = td.actualStart || '';
         row[`${t.short} Actual End`]   = td.actualEnd   || '';
         row[`${t.short} Actual %`]     = Number(td.percentActual)||0;
@@ -4641,8 +4659,8 @@ function exportExcel(){
     {wch:5},{wch:8},{wch:22},{wch:22},{wch:22},
     ...TASKS.flatMap(()=>{
       const widths = [{wch:5}];
-      if(includeCDT) widths.push({wch:12},{wch:12});
-      widths.push({wch:12},{wch:12});
+      if(includeCDT) widths.push({wch:12},{wch:22},{wch:12},{wch:22});
+      widths.push({wch:12},{wch:22},{wch:12},{wch:22});
       widths.push({wch:12},{wch:12});
       widths.push({wch:10});
       return widths;
@@ -4662,13 +4680,18 @@ function exportExcel(){
       };
       TASKS.forEach(t => {
         const td = a.tasks[t.key];
+        const histToStr = arr => Array.isArray(arr) && arr.length ? arr.join(' | ') : '';
         row[`${t.short} N/A`] = td.na ? 'YES' : '';
         if(includeCDT){
-          row[`${t.short} Plan Start CDT`] = td.planStartCDT || '';
-          row[`${t.short} Plan End CDT`]   = td.planEndCDT   || '';
+          row[`${t.short} Plan Start CDT`]      = td.planStartCDT || '';
+          row[`${t.short} Plan Start CDT Hist`] = histToStr(td.planStartCDTHistory);
+          row[`${t.short} Plan End CDT`]        = td.planEndCDT   || '';
+          row[`${t.short} Plan End CDT Hist`]   = histToStr(td.planEndCDTHistory);
         }
-        row[`${t.short} Plan Start NT`] = td.planStartNT || '';
-        row[`${t.short} Plan End NT`]   = td.planEndNT   || '';
+        row[`${t.short} Plan Start NT`]      = td.planStartNT || '';
+        row[`${t.short} Plan Start NT Hist`] = histToStr(td.planStartNTHistory);
+        row[`${t.short} Plan End NT`]        = td.planEndNT   || '';
+        row[`${t.short} Plan End NT Hist`]   = histToStr(td.planEndNTHistory);
         row[`${t.short} Actual Start`]  = td.actualStart || '';
         row[`${t.short} Actual End`]    = td.actualEnd   || '';
         row[`${t.short} Actual %`]      = Number(td.percentActual)||0;
@@ -4680,8 +4703,8 @@ function exportExcel(){
       {wch:5},{wch:22},{wch:22},
       ...TASKS.flatMap(()=>{
         const widths = [{wch:5}];
-        if(includeCDT) widths.push({wch:12},{wch:12});
-        widths.push({wch:12},{wch:12});
+        if(includeCDT) widths.push({wch:12},{wch:22},{wch:12},{wch:22});
+        widths.push({wch:12},{wch:22},{wch:12},{wch:22});
         widths.push({wch:12},{wch:12});
         widths.push({wch:10});
         return widths;
@@ -4789,6 +4812,40 @@ function importExcel(e){
           const ap = row[`${t.short} Actual %`];
           if(ap !== undefined && ap !== '')
             td.percentActual = Math.max(0, Math.min(100, Number(ap)||0));
+
+          // === Plan History columns ===
+          // The export emits 4 history columns per task (Plan Start/End × CDT/NT)
+          // as pipe-separated dates like "2026-05-01 | 2026-05-15". They give
+          // the user a way to SEE every past revision in Excel.
+          //
+          // Edit policy on import:
+          //   • CDT can edit the history columns (e.g. to remove an obsolete
+          //     revision or fix a typo). Whatever they type in REPLACES the
+          //     stored history for that field.
+          //   • NT input on history columns is ignored — the contractor cannot
+          //     erase their own past commitments from a spreadsheet either.
+          //   • An EMPTY history cell is treated as "don't touch" (otherwise
+          //     re-importing a file that simply omits the column would wipe
+          //     out all history). To intentionally clear history, CDT uses
+          //     the × button in the side panel.
+          const parseHist = v => {
+            if(v === undefined || v === null) return null;
+            const s = String(v).trim();
+            if(s === '') return null;
+            return s.split('|').map(x => normalizeDate(x.trim())).filter(Boolean);
+          };
+          const histPairs = [
+            { col: `${t.short} Plan Start CDT Hist`, key: 'planStartCDTHistory', cdtOnly: true  },
+            { col: `${t.short} Plan End CDT Hist`,   key: 'planEndCDTHistory',   cdtOnly: true  },
+            { col: `${t.short} Plan Start NT Hist`,  key: 'planStartNTHistory',  cdtOnly: false },
+            { col: `${t.short} Plan End NT Hist`,    key: 'planEndNTHistory',    cdtOnly: false },
+          ];
+          histPairs.forEach(p => {
+            const parsed = parseHist(row[p.col]);
+            if(parsed === null) return;             // empty cell → keep existing
+            if(!isCDT){ skippedHistory++; return; } // NT cannot edit history
+            td[p.key] = parsed;
+          });
         });
       };
 
