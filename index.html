@@ -4610,10 +4610,15 @@ function renderStats(){
 
 /* =============================================================
    EXCEL EXPORT/IMPORT
-   - "ALL" sheet : grouped headers (row 1 = trade group, row 2 = field)
-                   real Excel dates, % format, freeze panes
-   - One sheet per floor (same layout, omits Floor column)
-   - "Plan History" sheet : separate, one row per revised (area, trade, field)
+   - "ALL" sheet : current state (current plan + actual + %)
+                   3-row header (trade group / sub-group / detail),
+                   real Excel dates, % format, freeze panes.
+   - One sheet per floor : same layout, omits Floor column.
+   - "Initial Plan" sheet : baseline plan — for each (area, trade, field),
+                   the FIRST commitment (history[0] if revised, else current).
+                   Editable by CDT only: an edit overwrites history[0] when
+                   history exists, otherwise overwrites current. NT input is
+                   silently rejected to keep original commitments protected.
 ============================================================= */
 function exportExcel(){
   const totalAreas = STATE.floors.reduce((s,f) => s + (f.areas||[]).length, 0);
@@ -4621,11 +4626,10 @@ function exportExcel(){
     alert('No areas to export across any floor.');
     return;
   }
-  const includeCDT = ROLE.isCDT();   // NT export skips Plan CDT columns
+  const includeCDT = ROLE.isCDT();   // NT export omits Plan CDT entirely
   const wb = XLSX.utils.book_new();
 
-  // Convert "YYYY-MM-DD" → native Date so Excel treats it as a real date.
-  // Empty / invalid input becomes '' so the cell is blank (not 1899-12-30).
+  // YYYY-MM-DD string → native Date so Excel sees a real date.
   const toDate = s => {
     if(!s) return '';
     const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})/);
@@ -4634,51 +4638,26 @@ function exportExcel(){
     return isNaN(d) ? '' : d;
   };
 
-  // Column shape per trade (history is in a SEPARATE sheet for readability).
-  // The BASE column titles (without prefix) — used for the merged group header
-  // pretty-print, and to compose the per-trade unique detail headers below.
-  const tradeColsBase = includeCDT
-    ? ['N/A','Plan Start CDT','Plan End CDT','Plan Start NT','Plan End NT','Actual Start','Actual End','Actual %']
-    : ['N/A','Plan Start NT','Plan End NT','Actual Start','Actual End','Actual %'];
-  const colsPerTrade = tradeColsBase.length;
-  // Detail headers PREFIX each column with the trade's short code so that two
-  // trades sharing the same field name (e.g. "Plan Start CDT") still get
-  // unique cell keys when sheet_to_json reads them on import. The merged
-  // group header in row 0 carries the friendly full name ("Waterproof") so
-  // the prefix duplication doesn't hurt readability.
-  const detailColsForTrade = (t) => tradeColsBase.map(c => `${t.short} ${c}`);
-  // Indices (within a trade block) of date columns and the percent column.
-  const dateOffsets = includeCDT ? [1,2,3,4,5,6] : [1,2,3,4];
+  // ----- Main-sheet column shape -----
+  // Per trade (with CDT, 8 cols):
+  //   [N/A] [Plan CDT: Start End] [Plan NT: Start End] [Actual: Start End] [%]
+  // Per trade (NT-only role, 6 cols):
+  //   [N/A] [Plan NT: Start End] [Actual: Start End] [%]
+  //
+  // Each "[group: Start End]" pair gets a merged sub-header in row 1.
+  const subgroups = includeCDT
+    ? [['', 1], ['Plan CDT', 2], ['Plan NT', 2], ['Actual', 2], ['', 1]]
+    : [['', 1], ['Plan NT', 2], ['Actual', 2], ['', 1]];
+  // Detail-row column titles (within one trade), prefixed with trade short
+  // at write time so every column is uniquely named for sheet_to_json.
+  const detailBase = includeCDT
+    ? ['N/A', 'Plan Start CDT', 'Plan End CDT', 'Plan Start NT', 'Plan End NT', 'Actual Start', 'Actual End', '%']
+    : ['N/A', 'Plan Start NT', 'Plan End NT', 'Actual Start', 'Actual End', '%'];
+  const colsPerTrade = detailBase.length;
+  const dateOffsets  = includeCDT ? [1,2,3,4,5,6] : [1,2,3,4];
   const pctOffsetInTrade = colsPerTrade - 1;
 
-  // Walks a freshly-built sheet and applies number formats to dates / percent.
-  // Pure-display formatting; the underlying values are real Dates and Numbers.
-  const applyFormats = (ws, baseColCount, dataRowCount) => {
-    for(let r = 2; r < 2 + dataRowCount; r++){
-      TASKS.forEach((t, ti) => {
-        const tradeStart = baseColCount + ti * colsPerTrade;
-        dateOffsets.forEach(off => {
-          const addr = XLSX.utils.encode_cell({r, c: tradeStart + off});
-          const cell = ws[addr];
-          if(cell && cell.v instanceof Date){
-            cell.t = 'd';
-            cell.z = 'yyyy-mm-dd';
-          }
-        });
-        const pctAddr = XLSX.utils.encode_cell({r, c: tradeStart + pctOffsetInTrade});
-        const pctCell = ws[pctAddr];
-        // Keep value as 0..100 number; show with literal % suffix so the
-        // round-trip through Excel doesn't accidentally divide by 100.
-        if(pctCell) pctCell.z = '0"%"';
-      });
-    }
-  };
-  // Merge the group-header row across each trade's columns.
-  const buildMerges = (baseColCount) => TASKS.map((t, i) => {
-    const startCol = baseColCount + i * colsPerTrade;
-    return { s: {r:0, c:startCol}, e: {r:0, c:startCol + colsPerTrade - 1} };
-  });
-  // Build a single data row (array form, no per-row object keys).
+  // Build a data row (raw values: Date objects for dates, numbers for %).
   const buildDataRow = (leading, area) => {
     ensureAreaTasks(area);
     const row = [...leading];
@@ -4698,55 +4677,93 @@ function exportExcel(){
     return row;
   };
 
-  // ===== ALL sheet =====
-  const allBase = ['No.', 'Floor', 'Floor ID', 'Area ID', 'Area Name'];
-  const allGroup  = [...allBase.map(()=>''), ...TASKS.flatMap(t => [t.name, ...Array(colsPerTrade-1).fill('')])];
-  const allDetail = [...allBase, ...TASKS.flatMap(t => detailColsForTrade(t))];
-  const allDataRows = [];
-  let counter = 1;
-  STATE.floors.forEach(f => {
-    (f.areas||[]).forEach(a => {
-      allDataRows.push(buildDataRow([counter++, f.name, f.id, a.id, a.name], a));
+  // Apply yyyy-mm-dd format to date cells and 0"%" format to percent cells.
+  const applyFormats = (ws, baseColCount, dataStartRow, dataRowCount) => {
+    for(let r = dataStartRow; r < dataStartRow + dataRowCount; r++){
+      TASKS.forEach((t, ti) => {
+        const tradeStart = baseColCount + ti * colsPerTrade;
+        dateOffsets.forEach(off => {
+          const cell = ws[XLSX.utils.encode_cell({r, c: tradeStart + off})];
+          if(cell && cell.v instanceof Date){ cell.t = 'd'; cell.z = 'yyyy-mm-dd'; }
+        });
+        const pctCell = ws[XLSX.utils.encode_cell({r, c: tradeStart + pctOffsetInTrade})];
+        if(pctCell) pctCell.z = '0"%"';
+      });
+    }
+  };
+  // Merges for the trade-group row (row 0) and the sub-group row (row 1).
+  const buildMerges = (baseColCount) => {
+    const merges = [];
+    TASKS.forEach((t, i) => {
+      const tradeStart = baseColCount + i * colsPerTrade;
+      // Row 0 — whole trade
+      merges.push({ s: {r:0, c:tradeStart}, e: {r:0, c:tradeStart + colsPerTrade - 1} });
+      // Row 1 — Plan CDT / Plan NT / Actual sub-groups
+      let off = 0;
+      subgroups.forEach(([name, span]) => {
+        if(span > 1 && name){
+          merges.push({ s: {r:1, c:tradeStart + off}, e: {r:1, c:tradeStart + off + span - 1} });
+        }
+        off += span;
+      });
     });
-  });
-  const wsAll = XLSX.utils.aoa_to_sheet([allGroup, allDetail, ...allDataRows]);
+    return merges;
+  };
+  const subgroupRowCells = (() => {
+    const cells = [];
+    subgroups.forEach(([name, span]) => {
+      cells.push(name);
+      for(let i = 1; i < span; i++) cells.push('');
+    });
+    return cells;
+  })();
+
+  const colWidthsForTrade = () => {
+    const w = [{wch:6}];                       // N/A
+    if(includeCDT) w.push({wch:11},{wch:11});  // Plan CDT
+    w.push({wch:11},{wch:11});                 // Plan NT
+    w.push({wch:11},{wch:11});                 // Actual
+    w.push({wch:8});                           // %
+    return w;
+  };
+
+  // ============= ALL sheet =============
+  // Drop Floor ID and Area ID — match areas by Floor name + Area Name.
+  const allBase = ['No.', 'Floor', 'Area Name'];
+  const allRow0 = [...allBase.map(()=>''), ...TASKS.flatMap(t => [t.name, ...Array(colsPerTrade-1).fill('')])];
+  const allRow1 = [...allBase.map(()=>''), ...TASKS.flatMap(() => subgroupRowCells)];
+  const allRow2 = [...allBase, ...TASKS.flatMap(t => detailBase.map(c => `${t.short} ${c}`))];
+
+  const allData = [];
+  let counter = 1;
+  STATE.floors.forEach(f => (f.areas||[]).forEach(a => {
+    allData.push(buildDataRow([counter++, f.name, a.name], a));
+  }));
+  const wsAll = XLSX.utils.aoa_to_sheet([allRow0, allRow1, allRow2, ...allData]);
   wsAll['!merges'] = buildMerges(allBase.length);
-  applyFormats(wsAll, allBase.length, allDataRows.length);
-  wsAll['!views'] = [{ state: 'frozen', xSplit: allBase.length, ySplit: 2 }];
+  applyFormats(wsAll, allBase.length, 3, allData.length);
+  wsAll['!views'] = [{ state: 'frozen', xSplit: allBase.length, ySplit: 3 }];
   wsAll['!cols'] = [
-    {wch:5},{wch:10},{wch:22},{wch:22},{wch:26},
-    ...TASKS.flatMap(() => {
-      const w = [{wch:6}];                              // N/A
-      if(includeCDT) w.push({wch:13},{wch:13});         // Plan CDT
-      w.push({wch:13},{wch:13});                        // Plan NT
-      w.push({wch:13},{wch:13});                        // Actual
-      w.push({wch:9});                                  // %
-      return w;
-    }),
+    {wch:5}, {wch:10}, {wch:26},
+    ...TASKS.flatMap(() => colWidthsForTrade()),
   ];
   XLSX.utils.book_append_sheet(wb, wsAll, 'ALL');
 
-  // ===== Per-floor sheets =====
+  // ============= Per-floor sheets =============
   STATE.floors.forEach(f => {
     if((f.areas||[]).length === 0) return;
-    const fBase = ['No.', 'Area ID', 'Area Name'];
-    const fGroup  = [...fBase.map(()=>''), ...TASKS.flatMap(t => [t.name, ...Array(colsPerTrade-1).fill('')])];
-    const fDetail = [...fBase, ...TASKS.flatMap(t => detailColsForTrade(t))];
-    const fData = (f.areas||[]).map((a, i) => buildDataRow([i+1, a.id, a.name], a));
-    const ws = XLSX.utils.aoa_to_sheet([fGroup, fDetail, ...fData]);
+    const fBase = ['No.', 'Area Name'];
+    const fRow0 = [...fBase.map(()=>''), ...TASKS.flatMap(t => [t.name, ...Array(colsPerTrade-1).fill('')])];
+    const fRow1 = [...fBase.map(()=>''), ...TASKS.flatMap(() => subgroupRowCells)];
+    const fRow2 = [...fBase, ...TASKS.flatMap(t => detailBase.map(c => `${t.short} ${c}`))];
+    const fData = (f.areas||[]).map((a, i) => buildDataRow([i+1, a.name], a));
+    const ws = XLSX.utils.aoa_to_sheet([fRow0, fRow1, fRow2, ...fData]);
     ws['!merges'] = buildMerges(fBase.length);
-    applyFormats(ws, fBase.length, fData.length);
-    ws['!views'] = [{ state: 'frozen', xSplit: fBase.length, ySplit: 2 }];
+    applyFormats(ws, fBase.length, 3, fData.length);
+    ws['!views'] = [{ state: 'frozen', xSplit: fBase.length, ySplit: 3 }];
     ws['!cols'] = [
-      {wch:5},{wch:22},{wch:26},
-      ...TASKS.flatMap(() => {
-        const w = [{wch:6}];
-        if(includeCDT) w.push({wch:13},{wch:13});
-        w.push({wch:13},{wch:13});
-        w.push({wch:13},{wch:13});
-        w.push({wch:9});
-        return w;
-      }),
+      {wch:5}, {wch:26},
+      ...TASKS.flatMap(() => colWidthsForTrade()),
     ];
     let sheetName = (f.name || 'Floor').replace(/[\[\]\/\\?*]/g,'').slice(0,31);
     let n = 1;
@@ -4754,73 +4771,86 @@ function exportExcel(){
     XLSX.utils.book_append_sheet(wb, ws, sheetName);
   });
 
-  // ===== Plan History sheet =====
-  // One row per (area × trade × plan-field) that has at least one revision.
-  // Layout: No. | Floor | Floor ID | Area ID | Area Name | Trade | Field |
-  //         Rev 1 | Rev 2 | ... | Rev N | Current
-  // Rev columns expand to fit the longest history across all rows.
-  const histFieldDefs = includeCDT
-    ? [
-        { key: 'planStartCDT', label: 'Plan Start CDT', histKey: 'planStartCDTHistory' },
-        { key: 'planEndCDT',   label: 'Plan End CDT',   histKey: 'planEndCDTHistory' },
-        { key: 'planStartNT',  label: 'Plan Start NT',  histKey: 'planStartNTHistory' },
-        { key: 'planEndNT',    label: 'Plan End NT',    histKey: 'planEndNTHistory' },
-      ]
-    : [
-        { key: 'planStartNT', label: 'Plan Start NT', histKey: 'planStartNTHistory' },
-        { key: 'planEndNT',   label: 'Plan End NT',   histKey: 'planEndNTHistory' },
-      ];
-  const histEntries = [];
-  let maxRevs = 0;
-  STATE.floors.forEach(f => {
-    (f.areas||[]).forEach(a => {
-      ensureAreaTasks(a);
-      TASKS.forEach(t => {
-        const td = a.tasks[t.key];
-        histFieldDefs.forEach(ff => {
-          const arr = Array.isArray(td[ff.histKey]) ? td[ff.histKey] : [];
-          if(arr.length === 0) return;
-          maxRevs = Math.max(maxRevs, arr.length);
-          histEntries.push({
-            floor: f.name, floorId: f.id, areaId: a.id, areaName: a.name,
-            trade: t.short + ' · ' + t.name, field: ff.label,
-            revs: arr.map(toDate), current: toDate(td[ff.key]),
-          });
-        });
-      });
+  // ============= Initial Plan sheet =============
+  // For each (area × trade × plan-field): show the FIRST committed date.
+  //   initial = history[0] if there has been at least one revision,
+  //             otherwise the current value (never-revised = initial = current).
+  // Read-only: this sheet is informational; importing it is a no-op so the
+  // user can't accidentally rewrite the original commitments by typing here.
+  const ipSubgroups = includeCDT
+    ? [['Plan CDT', 2], ['Plan NT', 2]]
+    : [['Plan NT', 2]];
+  const ipDetailBase = includeCDT
+    ? ['Plan Start CDT', 'Plan End CDT', 'Plan Start NT', 'Plan End NT']
+    : ['Plan Start NT', 'Plan End NT'];
+  const ipColsPerTrade = ipDetailBase.length;
+  const ipDateOffsets  = includeCDT ? [0,1,2,3] : [0,1];
+  const initialOf = (current, hist) =>
+    (Array.isArray(hist) && hist.length > 0) ? hist[0] : current;
+
+  const ipBase = ['No.', 'Floor', 'Area Name'];
+  const ipRow0 = [...ipBase.map(()=>''), ...TASKS.flatMap(t => [t.name, ...Array(ipColsPerTrade-1).fill('')])];
+  const ipSubgroupCells = (() => {
+    const cells = [];
+    ipSubgroups.forEach(([name, span]) => {
+      cells.push(name);
+      for(let i = 1; i < span; i++) cells.push('');
+    });
+    return cells;
+  })();
+  const ipRow1 = [...ipBase.map(()=>''), ...TASKS.flatMap(() => ipSubgroupCells)];
+  const ipRow2 = [...ipBase, ...TASKS.flatMap(t => ipDetailBase.map(c => `${t.short} ${c}`))];
+  const ipData = [];
+  let ipCounter = 1;
+  STATE.floors.forEach(f => (f.areas||[]).forEach(a => {
+    ensureAreaTasks(a);
+    const row = [ipCounter++, f.name, a.name];
+    TASKS.forEach(t => {
+      const td = a.tasks[t.key];
+      if(includeCDT){
+        row.push(toDate(initialOf(td.planStartCDT, td.planStartCDTHistory)));
+        row.push(toDate(initialOf(td.planEndCDT,   td.planEndCDTHistory)));
+      }
+      row.push(toDate(initialOf(td.planStartNT, td.planStartNTHistory)));
+      row.push(toDate(initialOf(td.planEndNT,   td.planEndNTHistory)));
+    });
+    ipData.push(row);
+  }));
+  const wsIP = XLSX.utils.aoa_to_sheet([ipRow0, ipRow1, ipRow2, ...ipData]);
+  const ipMerges = [];
+  TASKS.forEach((t, i) => {
+    const tradeStart = ipBase.length + i * ipColsPerTrade;
+    ipMerges.push({ s: {r:0, c:tradeStart}, e: {r:0, c:tradeStart + ipColsPerTrade - 1} });
+    let off = 0;
+    ipSubgroups.forEach(([name, span]) => {
+      if(span > 1 && name){
+        ipMerges.push({ s: {r:1, c:tradeStart + off}, e: {r:1, c:tradeStart + off + span - 1} });
+      }
+      off += span;
     });
   });
-  if(histEntries.length > 0){
-    const histBase = ['No.', 'Floor', 'Floor ID', 'Area ID', 'Area Name', 'Trade', 'Field'];
-    const revHeaders = Array.from({length: maxRevs}, (_, i) => `Rev ${i+1}`);
-    const headers = [...histBase, ...revHeaders, 'Current'];
-    const histAoa = [headers];
-    histEntries.forEach((e, i) => {
-      const row = [i+1, e.floor, e.floorId, e.areaId, e.areaName, e.trade, e.field];
-      for(let j = 0; j < maxRevs; j++) row.push(e.revs[j] !== undefined ? e.revs[j] : '');
-      row.push(e.current);
-      histAoa.push(row);
+  wsIP['!merges'] = ipMerges;
+  // Date format only — no actuals, no %.
+  for(let r = 3; r < 3 + ipData.length; r++){
+    TASKS.forEach((t, ti) => {
+      const tradeStart = ipBase.length + ti * ipColsPerTrade;
+      ipDateOffsets.forEach(off => {
+        const cell = wsIP[XLSX.utils.encode_cell({r, c: tradeStart + off})];
+        if(cell && cell.v instanceof Date){ cell.t = 'd'; cell.z = 'yyyy-mm-dd'; }
+      });
     });
-    const wsHist = XLSX.utils.aoa_to_sheet(histAoa);
-    // Date-format every Rev * + Current cell
-    for(let r = 1; r < histAoa.length; r++){
-      for(let c = histBase.length; c <= histBase.length + maxRevs; c++){
-        const addr = XLSX.utils.encode_cell({r, c});
-        const cell = wsHist[addr];
-        if(cell && cell.v instanceof Date){
-          cell.t = 'd';
-          cell.z = 'yyyy-mm-dd';
-        }
-      }
-    }
-    wsHist['!views'] = [{ state: 'frozen', xSplit: histBase.length, ySplit: 1 }];
-    wsHist['!cols'] = [
-      {wch:5},{wch:10},{wch:22},{wch:22},{wch:26},{wch:24},{wch:18},
-      ...Array.from({length: maxRevs}, () => ({wch:13})),
-      {wch:13},
-    ];
-    XLSX.utils.book_append_sheet(wb, wsHist, 'Plan History');
   }
+  wsIP['!views'] = [{ state: 'frozen', xSplit: ipBase.length, ySplit: 3 }];
+  wsIP['!cols'] = [
+    {wch:5}, {wch:10}, {wch:26},
+    ...TASKS.flatMap(() => {
+      const w = [];
+      if(includeCDT) w.push({wch:11},{wch:11});
+      w.push({wch:11},{wch:11});
+      return w;
+    }),
+  ];
+  XLSX.utils.book_append_sheet(wb, wsIP, 'Initial Plan');
 
   const roleTag = ROLE.isCDT() ? 'CDT' : 'NT';
   const fname = `SCM-B14-${roleTag}-${new Date().toISOString().slice(0,10)}.xlsx`;
@@ -4845,7 +4875,7 @@ function importExcel(e){
         floorByName[fl.name] = fl;
       });
 
-      let updated = 0, notFound = 0, skippedCDT = 0, renamed = 0, skippedHistory = 0;
+      let updated = 0, notFound = 0, skippedCDT = 0, renamed = 0, skippedHistory = 0, skippedInitial = 0;
 
       const applyRowToArea = (row, area, floor) => {
         ensureAreaTasks(area);
@@ -4915,8 +4945,12 @@ function importExcel(e){
           if(aS !== undefined && aS !== '') td.actualStart = normalizeDate(aS);
           if(aE !== undefined && aE !== '') td.actualEnd   = normalizeDate(aE);
           // Actual % — accept raw numbers ("85") AND format strings ("85%")
-          // so files exported with the new % cell-format round-trip cleanly.
-          const ap = row[`${t.short} Actual %`];
+          // so files exported with the % cell-format round-trip cleanly.
+          // The current export uses "<short> %" as the header; older files
+          // used "<short> Actual %" — accept either.
+          const ap = row[`${t.short} %`] !== undefined
+            ? row[`${t.short} %`]
+            : row[`${t.short} Actual %`];
           if(ap !== undefined && ap !== ''){
             const cleaned = String(ap).replace(/[%\s,]/g, '');
             const num = Number(cleaned);
@@ -4973,22 +5007,26 @@ function importExcel(e){
         return area ? {area, floor} : null;
       };
 
-      // The new export format uses TWO header rows: row 0 is the trade group
-      // (merged across each trade), row 1 is the actual field names. Old files
-      // only have a single header row. Detect which we're dealing with by
-      // peeking at cell A1 — if it's "No." that's the old single-row layout,
-      // otherwise it's the new two-row layout and we tell sheet_to_json to
-      // skip the group row.
+      // The export format keeps "No." in column A of the detail-header row,
+      // wherever that row happens to be: old single-header files have it at
+      // row 0; the current 3-row-header format puts it at row 2. Scan col A
+      // for "No." and use that row as the header for sheet_to_json so the
+      // helper works with any past or current export.
       const readSheet = (ws) => {
-        const a1 = ws['A1'];
-        const oldFormat = a1 && String(a1.v).trim().toLowerCase() === 'no.';
-        // raw:true → cells come back as their native JS types: Date for date
-        // cells (workbook was read with cellDates:true), Number for numeric
-        // cells, String for text. This avoids locale-specific date formatting
-        // ("5/1/26" vs "1/5/26") that raw:false would inject.
+        let headerRow = 0;
+        for(let r = 0; r < 6; r++){
+          const cell = ws[XLSX.utils.encode_cell({r, c: 0})];
+          if(cell && String(cell.v).trim().toLowerCase() === 'no.'){
+            headerRow = r;
+            break;
+          }
+        }
+        // raw:true → cells come back as native JS types: Date for date cells
+        // (workbook is read with cellDates:true), Number for numeric cells,
+        // String for text. Avoids locale-dependent date strings like "5/1/26".
         return XLSX.utils.sheet_to_json(ws, {
           raw: true,
-          range: oldFormat ? 0 : 1,
+          range: headerRow,
         });
       };
 
@@ -5041,6 +5079,48 @@ function importExcel(e){
         });
       }
 
+      // ===== Initial Plan sheet =====
+      // Lets CDT correct typos in the original committed dates. Per field:
+      //   • If history is non-empty: replace history[0] (current stays).
+      //     The baseline was already snapshotted when the plan got revised;
+      //     this just fixes the snapshot, leaving the latest revision alone.
+      //   • If history is empty: write to the current value (initial==current
+      //     when nothing has been revised yet).
+      // Empty cells are skipped — to wipe a plan use the side-panel UI.
+      // NT cannot edit the baseline (would be rewriting commitments).
+      if(wb.SheetNames.includes('Initial Plan')){
+        const ws = wb.Sheets['Initial Plan'];
+        const rows = readSheet(ws);
+        const ipFields = [
+          { col: 'Plan Start CDT', hist: 'planStartCDTHistory', cur: 'planStartCDT' },
+          { col: 'Plan End CDT',   hist: 'planEndCDTHistory',   cur: 'planEndCDT' },
+          { col: 'Plan Start NT',  hist: 'planStartNTHistory',  cur: 'planStartNT' },
+          { col: 'Plan End NT',    hist: 'planEndNTHistory',    cur: 'planEndNT' },
+        ];
+        rows.forEach(row => {
+          const hit = findAreaForRow(row, null);
+          if(!hit){ notFound++; return; }
+          ensureAreaTasks(hit.area);
+          TASKS.forEach(t => {
+            const td = hit.area.tasks[t.key];
+            ipFields.forEach(f => {
+              const v = row[`${t.short} ${f.col}`];
+              if(v === undefined || v === '') return;
+              const newDate = normalizeDate(v);
+              if(!newDate) return;
+              if(!isCDT){ skippedInitial++; return; }
+              const hist = Array.isArray(td[f.hist]) ? td[f.hist] : [];
+              if(hist.length > 0){
+                hist[0] = newDate;
+                td[f.hist] = hist;
+              } else {
+                td[f.cur] = newDate;
+              }
+            });
+          });
+        });
+      }
+
       // Prefer the ALL sheet (one row per area-of-floor)
       if(wb.SheetNames.includes('ALL')){
         const ws = wb.Sheets['ALL'];
@@ -5055,7 +5135,9 @@ function importExcel(e){
 
       // Per-floor sheets — sheet name matches a floor name (no Floor column needed)
       wb.SheetNames.forEach(sn => {
-        if(sn === 'ALL' || sn === 'Plan History') return;
+        // Skip special sheets: ALL handled above, Plan History handled before,
+        // Initial Plan is informational/read-only (never imported back).
+        if(sn === 'ALL' || sn === 'Plan History' || sn === 'Initial Plan') return;
         const sheetFloor = floorByName[sn];
         if(!sheetFloor) return;   // sheet doesn't map to a known floor; skip
         const ws = wb.Sheets[sn];
@@ -5072,6 +5154,7 @@ function importExcel(e){
       if(renamed) msg += `\nAreas renamed: ${renamed}`;
       if(skippedHistory) msg += `\nOld plan-NT history protected (kept): ${skippedHistory}`;
       if(skippedCDT) msg += `\nPlan CDT cells skipped (NT cannot write): ${skippedCDT}`;
+      if(skippedInitial) msg += `\nInitial-plan cells skipped (NT cannot edit baseline): ${skippedInitial}`;
       alert(msg);
       render();
       if($('detailPanel').classList.contains('show')) renderDetailPanel();
