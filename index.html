@@ -1191,7 +1191,7 @@
 <header>
   <div class="logo">SCM<span>·B14</span> PROGRESS</div>
   <div class="subtitle">Multi-Task<br>Construction Tracker</div>
-  <div style="font-size:11px;color:#000;background:var(--green);padding:3px 10px;border-radius:12px;font-weight:700;font-family:var(--font-mono)">v26</div>
+  <div style="font-size:11px;color:#000;background:var(--green);padding:3px 10px;border-radius:12px;font-weight:700;font-family:var(--font-mono)">v27</div>
   <div class="toolbar">
     <button class="btn" id="loadImageBtn" title="Load floor plan (image or PDF) for the current floor">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg>
@@ -3576,10 +3576,12 @@ function calcTaskStatus(task){
   const startD = taskPlanStart(task) ? new Date(taskPlanStart(task)) : null;
   const endD   = taskPlanEnd(task)   ? new Date(taskPlanEnd(task))   : null;
 
-  // Plan hasn't started yet — task is in the future, not on-time and not delayed.
-  // (Previously this fell through to the on-time branch because planPct==0 and
-  // actualPct==0 satisfies actualPct >= planPct, which was misleading.)
-  if(startD && todayD < startD && actualPct < 100)
+  // Plan hasn't started yet AND user hasn't done any work yet → Future.
+  // If actualPct > 0 here, the user started ahead of schedule and the
+  // task is genuinely on-time (or beyond), so fall through to the normal
+  // branches. Using actualPct === 0 (instead of < 100) covers everything:
+  // any progress at all means we are NOT in the Future state.
+  if(startD && todayD < startD && actualPct === 0)
     return {status:'future', label:'Future', color:'#5b6470'};
 
   if(endD && todayD > endD && actualPct < 100)
