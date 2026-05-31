@@ -1191,7 +1191,7 @@
 <header>
   <div class="logo">SCM<span>·B14</span> PROGRESS</div>
   <div class="subtitle">Multi-Task<br>Construction Tracker</div>
-  <div style="font-size:11px;color:#000;background:var(--green);padding:3px 10px;border-radius:12px;font-weight:700;font-family:var(--font-mono)">v25</div>
+  <div style="font-size:11px;color:#000;background:var(--green);padding:3px 10px;border-radius:12px;font-weight:700;font-family:var(--font-mono)">v26</div>
   <div class="toolbar">
     <button class="btn" id="loadImageBtn" title="Load floor plan (image or PDF) for the current floor">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg>
@@ -1310,6 +1310,7 @@
       </div>
       <button class="floor-btn wide" id="copyAreasBtn">📋 Copy areas to floors…</button>
       <button class="floor-btn wide" id="cleanupFloorsBtn" style="margin-top:6px;border-color:#ef4444;color:#ef4444">🧹 Cleanup empty floors</button>
+      <button class="floor-btn wide" id="resetHistoryBtn" style="margin-top:6px;border-color:#ef4444;color:#ef4444">🗑 Reset plan history</button>
       <button class="floor-btn wide" id="reloadCloudBtn" style="margin-top:6px;border-color:#3b82f6;color:#3b82f6">🔄 Force reload from cloud</button>
       <div class="hint" style="margin-top:6px">Each floor keeps its own progress &amp; plan image. After "+ Add", use <b>Load Plan</b> (top bar) to upload an image or PDF for that floor. "Copy areas" copies only shapes (names &amp; outlines), not dates/%.</div>
     </div>
@@ -2540,6 +2541,64 @@ async function cleanupEmptyFloors(){
   alert(`Deleted ${empty.length} empty floor(s).`);
 }
 
+// Wipe plan revision history across the entire project. After several Excel
+// re-imports each new value got pushed onto planStart*History/planEnd*History
+// — the UI then shows those old dates as strikethrough revisions and the
+// Initial Plan sheet displays history[0] instead of the current plan. Clearing
+// the arrays makes Initial Plan fall back to current and removes the
+// strikethrough clutter. The current plan dates are NOT touched.
+async function resetPlanHistory(){
+  if(!ROLE.isCDT()){ alert('Only CDT can reset plan history.'); return; }
+  if(!confirm(
+    'Reset plan history for ALL areas across ALL floors?\n\n' +
+    '• Current plan dates are KEPT (Plan Start/End CDT & NT stay as-is).\n' +
+    '• All revision history is DELETED (the crossed-out old dates).\n' +
+    '• The "Initial Plan" sheet will fall back to current plan dates.\n\n' +
+    'This cannot be undone.'
+  )) return;
+
+  let touched = 0;
+  STATE.floors.forEach(f => {
+    (f.areas||[]).forEach(a => {
+      ensureAreaTasks(a);
+      TASKS.forEach(t => {
+        const td = a.tasks[t.key];
+        ['planStartCDTHistory','planEndCDTHistory','planStartNTHistory','planEndNTHistory'].forEach(k => {
+          if(Array.isArray(td[k]) && td[k].length > 0){
+            td[k] = [];
+            touched++;
+          }
+        });
+      });
+    });
+  });
+
+  if(touched === 0){
+    alert('No plan history found. Nothing to clear.');
+    return;
+  }
+
+  // Persist to cloud — each floor doc holds its areas+tasks.
+  if(window.FB && window.FB.ready){
+    setCloudStatus('saving','Resetting history…');
+    try{
+      const { db, doc, setDoc } = window.FB;
+      for(const f of STATE.floors){
+        await setDoc(doc(db,'projects', CLOUD.PROJECT_ID,'floors', f.id), buildFloorDoc(f));
+      }
+      setCloudStatus('synced','History reset');
+    } catch(err){
+      console.error(err);
+      setCloudStatus('error','Reset failed');
+      alert('Reset failed: ' + err.message);
+      return;
+    }
+  }
+
+  render();
+  alert(`Cleared ${touched} history entr${touched === 1 ? 'y' : 'ies'} across all floors.`);
+}
+
 // Build a fresh area from another area's SHAPE only (no progress data)
 function makeBlankAreaFrom(a){
   const na = {
@@ -2758,6 +2817,7 @@ function init(){
   $('delFloorBtn').addEventListener('click', deleteFloor);
   $('copyAreasBtn').addEventListener('click', copyAreasToFloors);
   $('cleanupFloorsBtn').addEventListener('click', cleanupEmptyFloors);
+  $('resetHistoryBtn').addEventListener('click', resetPlanHistory);
   $('reloadCloudBtn').addEventListener('click', async () => {
     if(!confirm('Discard any unsaved local changes and reload everything from the cloud?')) return;
     // Unsubscribe and re-fetch
@@ -5840,7 +5900,7 @@ function updateRoleUI(){
 
 function applyRolePermissions(){
   const ntOnly = ROLE.isNT();
-  const hideForNT = ['cloudPushBtn','addFloorBtn','renameFloorBtn','dupFloorBtn','delFloorBtn','copyAreasBtn','cleanupFloorsBtn','reloadCloudBtn','loadImageBtn','clearImageBtn','loadBtn'];
+  const hideForNT = ['cloudPushBtn','addFloorBtn','renameFloorBtn','dupFloorBtn','delFloorBtn','copyAreasBtn','cleanupFloorsBtn','resetHistoryBtn','reloadCloudBtn','loadImageBtn','clearImageBtn','loadBtn'];
   hideForNT.forEach(id => { const el = $(id); if(el) el.style.display = ntOnly ? 'none' : ''; });
   const drawBtn = document.querySelector('[data-mode="draw"]');
   if(drawBtn) drawBtn.style.display = ntOnly ? 'none' : '';
