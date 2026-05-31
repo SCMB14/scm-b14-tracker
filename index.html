@@ -1189,7 +1189,7 @@
 <header>
   <div class="logo">SCM<span>·B14</span> PROGRESS</div>
   <div class="subtitle">Multi-Task<br>Construction Tracker</div>
-  <div style="font-size:11px;color:#000;background:var(--green);padding:3px 10px;border-radius:12px;font-weight:700;font-family:var(--font-mono)">v21</div>
+  <div style="font-size:11px;color:#000;background:var(--green);padding:3px 10px;border-radius:12px;font-weight:700;font-family:var(--font-mono)">v22</div>
   <div class="toolbar">
     <button class="btn" id="loadImageBtn" title="Load floor plan (image or PDF) for the current floor">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg>
@@ -5079,7 +5079,71 @@ function importExcel(e){
         });
       }
 
-      // ===== Initial Plan sheet =====
+      // ===== Per-floor sheets FIRST =====
+      // Order matters: by processing per-floor sheets before ALL/Initial Plan,
+      // we can apply renames here (using position-based fallback when name
+      // doesn't match). Once names are updated, the subsequent ALL and
+      // Initial Plan sheets will match by name in the normal way.
+      //
+      // Position fallback: if a row's Area Name doesn't match any area in
+      // the sheet's floor, but the row index points to an area that exists,
+      // treat it as a rename: row N in sheet 4F → floor.areas[N-1].
+      // This only triggers when there's a 1:1 row-count match (no inserts
+      // or deletes), to avoid silently rewriting unrelated areas.
+      wb.SheetNames.forEach(sn => {
+        // Skip special sheets: ALL handled below, Plan History handled before,
+        // Initial Plan handled last.
+        if(sn === 'ALL' || sn === 'Plan History' || sn === 'Initial Plan') return;
+        const sheetFloor = floorByName[sn];
+        if(!sheetFloor) return;   // sheet doesn't map to a known floor; skip
+        const ws = wb.Sheets[sn];
+        const rows = readSheet(ws);
+        const floorAreas = sheetFloor.areas || [];
+        // Position fallback is safe only when row count exactly matches the
+        // floor's area count — otherwise insert/delete has misaligned the
+        // mapping and we should not silently rewrite.
+        const positionFallbackOK = rows.length === floorAreas.length;
+        rows.forEach((row, rowIdx) => {
+          const hit = findAreaForRow(row, sheetFloor);
+          if(hit){
+            applyRowToArea(row, hit.area, hit.floor);
+            updated++;
+            return;
+          }
+          // Name didn't match — try position fallback (rename case)
+          if(positionFallbackOK){
+            const area = floorAreas[rowIdx];
+            if(area){
+              const newName = String(row['Area Name'] || '').trim();
+              if(newName && newName !== area.name){
+                area.name = newName;
+                renamed++;
+              }
+              applyRowToArea(row, area, sheetFloor);
+              updated++;
+              return;
+            }
+          }
+          notFound++;
+        });
+      });
+
+      // ===== ALL sheet =====
+      // After per-floor pass, area names in app should reflect any renames
+      // that came from per-floor sheets, so name-based matching here will
+      // pick them up successfully.
+      if(wb.SheetNames.includes('ALL')){
+        const ws = wb.Sheets['ALL'];
+        const rows = readSheet(ws);
+        rows.forEach(row => {
+          const hit = findAreaForRow(row, null);
+          if(!hit){ notFound++; return; }
+          applyRowToArea(row, hit.area, hit.floor);
+          updated++;
+        });
+      }
+
+      // ===== Initial Plan sheet (LAST) =====
       // Lets CDT correct typos in the original committed dates. Per field:
       //   • If history is non-empty: replace history[0] (current stays).
       //     The baseline was already snapshotted when the plan got revised;
@@ -5088,6 +5152,7 @@ function importExcel(e){
       //     when nothing has been revised yet).
       // Empty cells are skipped — to wipe a plan use the side-panel UI.
       // NT cannot edit the baseline (would be rewriting commitments).
+      // Processed last so names already match after per-floor pass.
       if(wb.SheetNames.includes('Initial Plan')){
         const ws = wb.Sheets['Initial Plan'];
         const rows = readSheet(ws);
@@ -5120,35 +5185,6 @@ function importExcel(e){
           });
         });
       }
-
-      // Prefer the ALL sheet (one row per area-of-floor)
-      if(wb.SheetNames.includes('ALL')){
-        const ws = wb.Sheets['ALL'];
-        const rows = readSheet(ws);
-        rows.forEach(row => {
-          const hit = findAreaForRow(row, null);
-          if(!hit){ notFound++; return; }
-          applyRowToArea(row, hit.area, hit.floor);
-          updated++;
-        });
-      }
-
-      // Per-floor sheets — sheet name matches a floor name (no Floor column needed)
-      wb.SheetNames.forEach(sn => {
-        // Skip special sheets: ALL handled above, Plan History handled before,
-        // Initial Plan is informational/read-only (never imported back).
-        if(sn === 'ALL' || sn === 'Plan History' || sn === 'Initial Plan') return;
-        const sheetFloor = floorByName[sn];
-        if(!sheetFloor) return;   // sheet doesn't map to a known floor; skip
-        const ws = wb.Sheets[sn];
-        const rows = readSheet(ws);
-        rows.forEach(row => {
-          const hit = findAreaForRow(row, sheetFloor);
-          if(!hit){ notFound++; return; }
-          applyRowToArea(row, hit.area, hit.floor);
-          updated++;
-        });
-      });
 
       let msg = `Import complete.\nRows applied: ${updated}\nNot matched: ${notFound}`;
       if(renamed) msg += `\nAreas renamed: ${renamed}`;
