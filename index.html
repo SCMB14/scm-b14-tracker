@@ -856,6 +856,7 @@
   }
   .role-badge.cdt{border-color:#a855f7;color:#c084fc}
   .role-badge.nt{border-color:#22c55e;color:#4ade80}
+  .role-badge.admin{border-color:#f59e0b;color:#fbbf24}
   .role-badge .logout-x{
     margin-left:4px;width:16px;height:16px;border-radius:50%;background:transparent;
     border:1px solid currentColor;cursor:pointer;font-size:10px;line-height:1;
@@ -1191,7 +1192,7 @@
 <header>
   <div class="logo">SCM<span>·B14</span> PROGRESS</div>
   <div class="subtitle">Multi-Task<br>Construction Tracker</div>
-  <div style="font-size:11px;color:#000;background:var(--green);padding:3px 10px;border-radius:12px;font-weight:700;font-family:var(--font-mono)">v27</div>
+  <div style="font-size:11px;color:#000;background:var(--green);padding:3px 10px;border-radius:12px;font-weight:700;font-family:var(--font-mono)">v28</div>
   <div class="toolbar">
     <button class="btn" id="loadImageBtn" title="Load floor plan (image or PDF) for the current floor">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg>
@@ -1258,22 +1259,32 @@
     </div>
     <div class="modal-body" style="padding:24px">
       <div style="font-size:13px;color:var(--muted);margin-bottom:18px">Chọn vai trò của bạn để vào hệ thống tiến độ SCM-B14:</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:14px">
         <button class="role-btn" id="roleNTBtn">
-          <div style="font-size:24px">🏗</div>
-          <div style="font-weight:600">Nhà thầu</div>
-          <div style="font-size:11px;color:var(--muted);margin-top:2px">Xem &amp; nhập Plan của NT</div>
+          <div style="font-size:22px">🏗</div>
+          <div style="font-weight:600;font-size:12px">Nhà thầu</div>
+          <div style="font-size:10px;color:var(--muted);margin-top:2px">Plan NT &amp; %</div>
         </button>
         <button class="role-btn" id="roleCDTBtn">
-          <div style="font-size:24px">🏢</div>
-          <div style="font-weight:600">Chủ đầu tư</div>
-          <div style="font-size:11px;color:var(--muted);margin-top:2px">Cần password</div>
+          <div style="font-size:22px">🏢</div>
+          <div style="font-weight:600;font-size:12px">Chủ đầu tư</div>
+          <div style="font-size:10px;color:var(--muted);margin-top:2px">Cần password</div>
+        </button>
+        <button class="role-btn" id="roleAdminBtn">
+          <div style="font-size:22px">🛠</div>
+          <div style="font-weight:600;font-size:12px">Admin</div>
+          <div style="font-size:10px;color:var(--muted);margin-top:2px">Vẽ vùng &amp; toàn quyền</div>
         </button>
       </div>
       <div id="roleCDTPwdBox" style="display:none">
         <input type="password" id="roleCDTPwd" placeholder="Nhập password CĐT" style="width:100%;padding:10px;background:var(--panel-2);border:1px solid var(--border);color:var(--text);border-radius:6px;font-size:13px">
         <div id="roleCDTPwdErr" style="color:var(--red);font-size:11px;margin-top:6px;display:none">Sai password.</div>
         <button class="btn" id="roleCDTSubmit" style="margin-top:10px;width:100%">Vào CĐT</button>
+      </div>
+      <div id="roleAdminPwdBox" style="display:none">
+        <input type="password" id="roleAdminPwd" placeholder="Nhập password Admin" style="width:100%;padding:10px;background:var(--panel-2);border:1px solid var(--border);color:var(--text);border-radius:6px;font-size:13px">
+        <div id="roleAdminPwdErr" style="color:var(--red);font-size:11px;margin-top:6px;display:none">Sai password.</div>
+        <button class="btn" id="roleAdminSubmit" style="margin-top:10px;width:100%">Vào Admin</button>
       </div>
     </div>
   </div>
@@ -2669,11 +2680,34 @@ function ensureAreaTasks(a){
 /* ===== ROLE / PERSPECTIVE =====
    Role is determined by Firebase Auth UID — checked server-side via Firestore Rules.
    The CDT UID is the one we created in Firebase Console; everyone else (anonymous) is NT. */
+// Roles control which UI affordances are exposed.
+//   • admin → full access including drawing/editing polygons
+//   • cdt   → can edit dates/percent/N/A but cannot reshape polygons
+//   • nt    → contractor; can only edit Plan NT + Actual % (no polygons)
+// Admin gates the polygon-editing path. The password is checked once per
+// session via promptAdminUnlock(); it lives in code (no Firebase Auth)
+// because the threat model is "stop accidental edits from CDT/NT clicks",
+// not real authentication.
+const ADMIN_PASSWORD = 'sycamore2026';   // change this to whatever you want
 const ROLE = {
-  current: null,     // 'cdt' or 'nt'
+  current: null,                // 'admin' | 'cdt' | 'nt'
+  adminUnlocked: false,         // becomes true after the password is entered
+  isAdmin(){ return this.current === 'admin' && this.adminUnlocked; },
   isCDT(){ return this.current === 'cdt'; },
   isNT(){ return this.current === 'nt'; },
+  canEditShape(){ return this.isAdmin(); },
 };
+function promptAdminUnlock(){
+  if(ROLE.adminUnlocked) return true;
+  const pw = prompt('Enter admin password:');
+  if(pw === null) return false;
+  if(pw === ADMIN_PASSWORD){
+    ROLE.adminUnlocked = true;
+    return true;
+  }
+  alert('Wrong password.');
+  return false;
+}
 
 // CDT-only: which plan is the ACTIVE one for computed things (status, dashboard,
 // labels, compare). NT never has a choice — they always see Plan NT.
@@ -3030,10 +3064,14 @@ function setupAreaListDelegation(){
   });
 
   // --- Button clicks (rename / delete / reset label / clear history) ---
-  // Inline rename: double-click on the name text
+  // Inline rename: double-click on the name text (Admin only)
   areasList.addEventListener('dblclick', e => {
     const nameEl = e.target.closest('.name-text');
     if(!nameEl) return;
+    if(!ROLE.isAdmin()){
+      alert('Chỉ Admin mới có thể đổi tên vùng.');
+      return;
+    }
     const area = findAreaFromEvent(e);
     if(!area) return;
     startInlineRename(area, nameEl);
@@ -3206,6 +3244,12 @@ function updateTaskIndicator(){
    MODE
 ============================================================= */
 function setMode(m){
+  // Drawing/editing polygons is admin-only. CDT and NT may switch between
+  // select / pan modes for inspection, but draw lands them back on select.
+  if(m === 'draw' && !ROLE.isAdmin()){
+    alert('Chỉ Admin mới có thể vẽ hoặc chỉnh sửa vùng.');
+    m = 'select';
+  }
   STATE.mode = m;
   STATE.drawingPoints = [];
   document.querySelectorAll('[data-mode]').forEach(b => {
@@ -3282,8 +3326,9 @@ function onMouseDown(e){
   }
 
   // Vertex handle drag takes priority (select mode, on a selected area's corner)
+  // Admin only — non-admins can still click polygons to inspect but can't reshape.
   const handle = e.target.closest('.vertex-handle');
-  if(handle && e.button === 0 && STATE.mode === 'select'){
+  if(handle && e.button === 0 && STATE.mode === 'select' && ROLE.isAdmin()){
     STATE.vertexDrag = {
       areaId: handle.dataset.areaId,
       idx: parseInt(handle.dataset.idx, 10),
@@ -3295,8 +3340,9 @@ function onMouseDown(e){
   }
 
   // If pressing on the body of the ALREADY-SELECTED area, arm a whole-area move.
+  // Admin only.
   const bodyHit = e.target.closest('.polygon-shape');
-  if(bodyHit && e.button === 0 && STATE.mode === 'select'
+  if(bodyHit && e.button === 0 && STATE.mode === 'select' && ROLE.isAdmin()
      && bodyHit.dataset.id === STATE.selectedId){
     const p0 = screenToImg(e.clientX, e.clientY);
     STATE.areaDrag = {
@@ -3524,6 +3570,7 @@ function startInlineRename(area, nameEl){
 }
 
 function openRenameModal(area){
+  if(!ROLE.isAdmin()){ alert('Chỉ Admin mới có thể đổi tên vùng.'); return; }
   $('renameInput').value = area.name;
   $('renameInput').dataset.id = area.id;
   $('renameModal').classList.add('show');
@@ -3540,6 +3587,7 @@ function saveRename(){
 }
 
 function deleteArea(id){
+  if(!ROLE.isAdmin()){ alert('Chỉ Admin mới có thể xóa vùng.'); return; }
   if(!confirm('Delete this area and all its task data?')) return;
   STATE.areas = STATE.areas.filter(a => a.id !== id);
   if(STATE.selectedId === id){ STATE.selectedId = null; closeDetailPanel(); }
@@ -5894,24 +5942,35 @@ function updateRoleUI(){
   if(!badge) return;
   if(!ROLE.current){ badge.style.display = 'none'; return; }
   badge.style.display = '';
-  badge.classList.remove('cdt','nt');
+  badge.classList.remove('cdt','nt','admin');
   badge.classList.add(ROLE.current);
-  $('roleBadgeIcon').textContent = ROLE.isCDT() ? '🏢' : '🏗';
-  $('roleBadgeText').textContent = ROLE.isCDT() ? 'CĐT' : 'NT';
+  const icons = { admin:'🛠', cdt:'🏢', nt:'🏗' };
+  const labels = { admin:'Admin', cdt:'CĐT', nt:'NT' };
+  $('roleBadgeIcon').textContent = icons[ROLE.current] || '';
+  $('roleBadgeText').textContent = labels[ROLE.current] || '';
 }
 
 function applyRolePermissions(){
+  // Admin gets everything; CDT gets dates+%; NT gets just NT plan + actual %.
   const ntOnly = ROLE.isNT();
+  const isAdmin = ROLE.isAdmin();
+  // Anything that mutates the project (push, floor management, image swap,
+  // cleanup, history reset) is for CDT or Admin. NT sees a read-mostly view.
   const hideForNT = ['cloudPushBtn','addFloorBtn','renameFloorBtn','dupFloorBtn','delFloorBtn','copyAreasBtn','cleanupFloorsBtn','resetHistoryBtn','reloadCloudBtn','loadImageBtn','clearImageBtn','loadBtn'];
   hideForNT.forEach(id => { const el = $(id); if(el) el.style.display = ntOnly ? 'none' : ''; });
-  const drawBtn = document.querySelector('[data-mode="draw"]');
-  if(drawBtn) drawBtn.style.display = ntOnly ? 'none' : '';
+  // Polygon editing (Draw / Edit / Move modes) belongs ONLY to Admin. CDT can
+  // still tap polygons to inspect a unit; they just can't reshape one.
+  ['draw','edit','move'].forEach(mode => {
+    const btn = document.querySelector(`[data-mode="${mode}"]`);
+    if(btn) btn.style.display = isAdmin ? '' : 'none';
+  });
   document.body.classList.toggle('role-nt', ntOnly);
-  document.body.classList.toggle('role-cdt', !ntOnly);
-  // Plan view switch only visible to CDT
+  document.body.classList.toggle('role-cdt', ROLE.isCDT());
+  document.body.classList.toggle('role-admin', isAdmin);
+  // Plan view switch is for CDT (toggling between their own plan and NT's).
+  // Admin also gets it since they have full control over both plans.
   const pv = $('planViewSwitch');
-  if(pv) pv.style.display = ROLE.isCDT() ? '' : 'none';
-  // Force NT to use NT plan view; CDT defaults to CDT
+  if(pv) pv.style.display = (ROLE.isCDT() || isAdmin) ? '' : 'none';
   if(ntOnly) PLAN_VIEW = 'nt';
   else if(!PLAN_VIEW) PLAN_VIEW = 'cdt';
 }
@@ -5922,12 +5981,17 @@ function showLoginModal(){
   $('roleCDTPwdErr').style.display = 'none';
   const pwd = $('roleCDTPwd');
   if(pwd) pwd.value = '';
+  const adminBox = $('roleAdminPwdBox');
+  const adminErr = $('roleAdminPwdErr');
+  const adminPwd = $('roleAdminPwd');
+  if(adminBox) adminBox.style.display = 'none';
+  if(adminErr) adminErr.style.display = 'none';
+  if(adminPwd) adminPwd.value = '';
 }
 function hideLoginModal(){ $('loginModal').classList.remove('show'); }
 
 async function logoutAndReask(){
   try{ localStorage.removeItem('scm-b14-role'); }catch(e){}
-  // Unsubscribe from realtime listeners so we don't keep using old auth
   if(window.CLOUD){
     CLOUD.unsubscribes.forEach(u => { try{ u(); }catch(e){} });
     CLOUD.unsubscribes = [];
@@ -5936,29 +6000,32 @@ async function logoutAndReask(){
     if(window.FB && window.FB.auth) await window.FB.signOut(window.FB.auth);
   }catch(e){}
   ROLE.current = null;
+  ROLE.adminUnlocked = false;
   updateRoleUI();
   setCloudStatus('connecting','Logged out');
   showLoginModal();
 }
 
 // Sign in to Firebase based on chosen role, then connect to cloud.
+// Admin uses the same CDT credentials on the backend (so they have write
+// access to all the same Firestore docs); the 'admin' role is a UI-side
+// concept that gates polygon editing.
 async function chooseRole(role, password){
   const { auth, signInAnonymously, signInWithEmailAndPassword, CDT_EMAIL, CDT_UID } = window.FB;
   try{
     setCloudStatus('connecting','Signing in…');
     let cred;
-    if(role === 'cdt'){
+    if(role === 'cdt' || role === 'admin'){
       cred = await signInWithEmailAndPassword(auth, CDT_EMAIL, password);
       if(cred.user.uid !== CDT_UID){
-        // shouldn't happen, but guard
         throw new Error('UID mismatch — contact admin');
       }
     } else {
       cred = await signInAnonymously(auth);
     }
+    if(role === 'admin') ROLE.adminUnlocked = true;
     setRole(role);
     hideLoginModal();
-    // Now connect (which uses ROLE.current to decide whether to fetch /cdtPlan)
     const loaded = await cloudLoadAndSubscribe();
     if(!loaded) setCloudStatus('error','Cloud empty — Load Project + Push (CDT only)');
     return true;
@@ -6001,6 +6068,45 @@ function boot(){
   };
   $('roleCDTSubmit').addEventListener('click', submitCDT);
   $('roleCDTPwd').addEventListener('keydown', e => { if(e.key === 'Enter') submitCDT(); });
+
+  // Admin path: reveal password input, then submit. Server-side this uses
+  // the same CDT credentials (same Firestore write access); the 'admin'
+  // role is a UI-side gate on polygon editing only.
+  $('roleAdminBtn').addEventListener('click', () => {
+    $('roleAdminPwdBox').style.display = '';
+    $('roleAdminPwdErr').style.display = 'none';
+    setTimeout(() => $('roleAdminPwd').focus(), 50);
+  });
+  const submitAdmin = async () => {
+    const pwd = $('roleAdminPwd').value;
+    if(!pwd){ $('roleAdminPwdErr').textContent = 'Nhập password.'; $('roleAdminPwdErr').style.display=''; return; }
+    if(pwd !== ADMIN_PASSWORD){
+      $('roleAdminPwdErr').textContent = 'Sai password.';
+      $('roleAdminPwdErr').style.display = '';
+      $('roleAdminPwd').focus();
+      $('roleAdminPwd').select();
+      return;
+    }
+    // Admin uses CDT credentials for Firebase auth (so they have write access).
+    // Ask for CDT password as second factor — or, simpler, just sign in
+    // anonymously and rely on UI gating. Pick simpler for now: anonymous
+    // sign-in, but ROLE.current === 'admin' unlocks UI features.
+    // NOTE: this means an Admin client doesn't actually have write access at
+    // the Firestore level — only CDT does. For polygon edits Admin needs to
+    // ALSO have signed in with CDT creds. Two-step path:
+    const cdtPwd = prompt('Nhập password CĐT để xác thực với cloud:');
+    if(!cdtPwd) return;
+    const res = await chooseRole('admin', cdtPwd);
+    if(res !== true){
+      $('roleAdminPwdErr').textContent = 'Sai password CĐT.';
+      $('roleAdminPwdErr').style.display = '';
+      ROLE.adminUnlocked = false;
+      setCloudStatus('error','Sign-in failed');
+    }
+  };
+  $('roleAdminSubmit').addEventListener('click', submitAdmin);
+  $('roleAdminPwd').addEventListener('keydown', e => { if(e.key === 'Enter') submitAdmin(); });
+
   $('logoutBtn').addEventListener('click', logoutAndReask);
 
   // Plan view switch (CDT only)
