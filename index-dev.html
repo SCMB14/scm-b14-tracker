@@ -1275,7 +1275,7 @@
 <header>
   <div class="logo">SCM<span>·B14</span> PROGRESS</div>
   <div class="subtitle">Multi-Task<br>Construction Tracker</div>
-  <div style="font-size:11px;color:#000;background:#f59e0b;padding:3px 10px;border-radius:12px;font-weight:700;font-family:var(--font-mono)">v31-DEV</div>
+  <div style="font-size:11px;color:#000;background:#f59e0b;padding:3px 10px;border-radius:12px;font-weight:700;font-family:var(--font-mono)">v32-DEV</div>
   <div class="toolbar">
     <button class="btn" id="loadImageBtn" title="Load floor plan (image or PDF) for the current floor">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg>
@@ -1476,7 +1476,7 @@
           <div class="toggle on" data-toggle="showDates"></div>
         </div>
         <div class="toggle-row">
-          <span>Show Actual dates (panel)</span>
+          <span>Show Actual dates</span>
           <div class="toggle on" data-toggle="showActual"></div>
         </div>
         <div class="toggle-row">
@@ -4846,6 +4846,7 @@ function renderExternalLabel(area, statusColor){
     }
   } else {
     if(STATE.toggles.showDates) lineCount++;
+    if(STATE.toggles.showActual) lineCount++;
     if(STATE.toggles.showPct) lineCount++;
     if(STATE.toggles.showStatus) lineCount++;
   }
@@ -4981,7 +4982,11 @@ function renderExternalLabel(area, statusColor){
 
       // dates + pct (dark gray)
       const parts = [];
-      if(STATE.toggles.showDates) parts.push(`${fmtDate(taskPlanStart(taskData))}→${fmtDate(taskPlanEnd(taskData))}`);
+      if(STATE.toggles.showDates) parts.push(`P:${fmtDate(taskPlanStart(taskData))}→${fmtDate(taskPlanEnd(taskData))}`);
+      if(STATE.toggles.showActual){
+        const aS = taskData.actualStart, aE = taskData.actualEnd;
+        if(aS || aE) parts.push(`A:${fmtDate(aS)}→${fmtDate(aE)}`);
+      }
       if(STATE.toggles.showPct) parts.push(`P${planPct}% A${actPct}%`);
       const info = mkText(labelX + 38, yCursor, 'start');
       info.style.fontSize = '8.5px';
@@ -5011,6 +5016,18 @@ function renderExternalLabel(area, statusColor){
       const s = taskPlanStart(taskData) && taskPlanEnd(taskData)
         ? `Plan: ${fmtDate(taskPlanStart(taskData))} → ${fmtDate(taskPlanEnd(taskData))}`
         : 'Plan: —';
+      t.textContent = s;
+      g.appendChild(t);
+      yCursor += lineH;
+    }
+
+    if(STATE.toggles.showActual){
+      const t = mkText(cx, yCursor);
+      t.style.fontSize = '9.5px';
+      t.setAttribute('fill', '#444444');
+      const s = (taskData.actualStart || taskData.actualEnd)
+        ? `Actual: ${fmtDate(taskData.actualStart)} → ${fmtDate(taskData.actualEnd)}`
+        : 'Actual: —';
       t.textContent = s;
       g.appendChild(t);
       yCursor += lineH;
