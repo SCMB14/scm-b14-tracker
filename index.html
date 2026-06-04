@@ -3360,7 +3360,7 @@ function duplicateFloor(){
 }
 
 async function deleteFloor(){
-  if(!ROLE.isCDT()){ alert('Only CDT can delete floors.'); return; }
+  if(!ROLE.isAdmin()){ alert('Chỉ Admin mới có thể xóa floor.'); return; }
   if(STATE.floors.length <= 1){
     alert('You must keep at least one floor.');
     return;
@@ -3443,7 +3443,7 @@ function copyAreasToFloors(){
 // Remove every floor that has zero areas (junk floors). Also deletes them from
 // the cloud (/floors and /cdtPlan).
 async function cleanupEmptyFloors(){
-  if(!ROLE.isCDT()){ alert('Only CDT can clean up.'); return; }
+  if(!ROLE.isAdmin()){ alert('Chỉ Admin mới có thể cleanup floors.'); return; }
   const empty = STATE.floors.filter(f => (f.areas||[]).length === 0);
   if(empty.length === 0){ alert('No empty floors found. Nothing to clean up.'); return; }
   // Refuse to delete the currently-selected one if it's the only floor we have left
@@ -3499,7 +3499,7 @@ async function cleanupEmptyFloors(){
 // the arrays makes Initial Plan fall back to current and removes the
 // strikethrough clutter. The current plan dates are NOT touched.
 async function resetPlanHistory(){
-  if(!ROLE.isCDT()){ alert('Only CDT can reset plan history.'); return; }
+  if(!ROLE.isAdmin()){ alert('Chỉ Admin mới có thể reset plan history.'); return; }
   if(!confirm(
     'Reset plan history for ALL areas across ALL floors?\n\n' +
     '• Current plan dates are KEPT (Plan Start/End CDT & NT stay as-is).\n' +
@@ -3636,6 +3636,12 @@ const ROLE = {
   isCDT(){ return this.current === 'cdt'; },
   isNT(){ return this.current === 'nt'; },
   canEditShape(){ return this.isAdmin(); },
+  // Admin is treated as a superset of CDT for everything related to viewing
+  // and editing the CDT plan (Plan CDT dates, Plan CDT history, the dual
+  // plan view, the PLAN_VIEW toggle, /cdtPlan cloud subscribe + write).
+  // Use this whenever the question is "can this user see/edit CDT fields",
+  // NOT "is this user literally the CDT role".
+  canEditCDT(){ return this.isCDT() || this.isAdmin(); },
 };
 function promptAdminUnlock(){
   if(ROLE.adminUnlocked) return true;
@@ -3649,12 +3655,12 @@ function promptAdminUnlock(){
   return false;
 }
 
-// CDT-only: which plan is the ACTIVE one for computed things (status, dashboard,
-// labels, compare). NT never has a choice — they always see Plan NT.
-// 'cdt' or 'nt'. Defaults to 'cdt' (owner perspective).
+// CDT/Admin: which plan is the ACTIVE one for computed things (status,
+// dashboard, labels, compare). NT never has a choice — they always see
+// Plan NT. 'cdt' or 'nt'. Defaults to 'cdt' (owner perspective).
 let PLAN_VIEW = 'cdt';
 function activePlan(){
-  return ROLE.isCDT() ? PLAN_VIEW : 'nt';
+  return ROLE.canEditCDT() ? PLAN_VIEW : 'nt';
 }
 
 // Which plan fields the current view should read/write
@@ -4048,10 +4054,10 @@ function setupAreaListDelegation(){
     const clearBtn = e.target.closest('[data-clearhist]');
     if(clearBtn){
       e.stopPropagation();
-      // Only CDT can erase the contractor's plan revisions. NT must keep all
-      // their own previous commitments visible (and CDT's too).
-      if(!ROLE.isCDT()){
-        alert('Chỉ Chủ đầu tư (CĐT) mới được xóa lịch sử plan.\nNhà thầu có thể nhập plan mới — plan cũ sẽ tự động lưu vào lịch sử.');
+      // Only CDT/Admin can erase the contractor's plan revisions. NT must
+      // keep all their own previous commitments visible (and CDT's too).
+      if(!ROLE.canEditCDT()){
+        alert('Chỉ Chủ đầu tư (CĐT) hoặc Admin mới được xóa lịch sử plan.\nNhà thầu có thể nhập plan mới — plan cũ sẽ tự động lưu vào lịch sử.');
         return;
       }
       const area = findAreaFromEvent(e);
@@ -5121,7 +5127,7 @@ function showTooltip(e, area){
         </div>`;
       return;
     }
-    const planRowHtml = ROLE.isCDT()
+    const planRowHtml = ROLE.canEditCDT()
       ? `<div class="row"><span>Plan CĐT:</span><span>${fmtDate(taskPlanStartCDT(td))} → ${fmtDate(taskPlanEndCDT(td))}</span></div>
          <div class="row"><span>Plan NT:</span><span>${fmtDate(taskPlanStartNT(td))} → ${fmtDate(taskPlanEndNT(td))}</span></div>`
       : `<div class="row"><span>Plan:</span><span>${fmtDate(taskPlanStart(td))} → ${fmtDate(taskPlanEnd(td))}</span></div>`;
@@ -5273,8 +5279,8 @@ function buildRevisionsHtml(td){
   let html = '';
   if(startH.length || endH.length){
     html += `<div class="rev-title">Plan revisions <span style="opacity:.6">(${planFields().label} — old crossed out)</span></div>`;
-    // Only CDT sees the × clear-history buttons. NT keeps all revisions visible.
-    const canClear = ROLE.isCDT();
+    // Only CDT/Admin see the × clear-history buttons. NT keeps all revisions visible.
+    const canClear = ROLE.canEditCDT();
     if(startH.length){
       html += '<div class="rev-line"><span class="rev-lbl">Start:</span> ';
       html += startH.map(d => `<s>${fmtDate(d)}</s>`).join(' → ');
@@ -5388,11 +5394,11 @@ function renderAreaCard(area){
       </div>
       <div class="area-dates">
         <div class="date-field">
-          <label>Plan Start ${ROLE.isCDT() ? '<span style="font-size:9px;color:var(--muted)">('+planFields().label+')</span>' : ''}</label>
+          <label>Plan Start ${ROLE.canEditCDT() ? '<span style="font-size:9px;color:var(--muted)">('+planFields().label+')</span>' : ''}</label>
           <input type="date" data-field="planStart" value="${taskPlanStart(td)||''}">
         </div>
         <div class="date-field">
-          <label>Plan End ${ROLE.isCDT() ? '<span style="font-size:9px;color:var(--muted)">('+planFields().label+')</span>' : ''}</label>
+          <label>Plan End ${ROLE.canEditCDT() ? '<span style="font-size:9px;color:var(--muted)">('+planFields().label+')</span>' : ''}</label>
           <input type="date" data-field="planEnd" value="${taskPlanEnd(td)||''}">
         </div>
         <div class="date-field actual-date-field">
@@ -5404,7 +5410,7 @@ function renderAreaCard(area){
           <input type="date" data-field="actualEnd" value="${td.actualEnd||''}">
         </div>
       </div>
-      ${ROLE.isCDT() ? (()=>{
+      ${ROLE.canEditCDT() ? (()=>{
         const otherIsCDT = activePlan() !== 'cdt';
         const otherStart = otherIsCDT ? taskPlanStartCDT(td) : taskPlanStartNT(td);
         const otherEnd   = otherIsCDT ? taskPlanEndCDT(td)   : taskPlanEndNT(td);
@@ -5500,7 +5506,7 @@ function renderDetailPanel(){
     </div>
 
     <div id="tradeFields" style="${td.na ? 'opacity:0.4;pointer-events:none' : ''}">
-      ${ROLE.isCDT() ? `
+      ${ROLE.canEditCDT() ? `
         <div class="plan-dual-block">
           <div class="plan-dual-header">
             <span>🏢 Plan CĐT</span>
@@ -5663,8 +5669,8 @@ function wireDetailInputs(area){
     btn.addEventListener('click', e => {
       e.stopPropagation();
       // NT can never delete plan history — old commitments must stay visible
-      if(!ROLE.isCDT()){
-        alert('Chỉ Chủ đầu tư (CĐT) mới được xóa lịch sử plan.\nNhà thầu có thể nhập plan mới — plan cũ sẽ tự động lưu vào lịch sử.');
+      if(!ROLE.canEditCDT()){
+        alert('Chỉ Chủ đầu tư (CĐT) hoặc Admin mới được xóa lịch sử plan.\nNhà thầu có thể nhập plan mới — plan cũ sẽ tự động lưu vào lịch sử.');
         return;
       }
       const td = area.tasks[STATE.detailTab];
@@ -5764,7 +5770,7 @@ function exportExcel(){
     alert('No areas to export across any floor.');
     return;
   }
-  const includeCDT = ROLE.isCDT();   // NT export omits Plan CDT entirely
+  const includeCDT = ROLE.canEditCDT();   // NT export omits Plan CDT entirely
   const wb = XLSX.utils.book_new();
 
   // YYYY-MM-DD string → native Date so Excel sees a real date.
@@ -6527,6 +6533,14 @@ const CLOUD = {
   saveTimer: null,
   applyingRemote: false,    // when true, our writes are skipped (we're reflecting cloud state)
   lastFloorImageHash: {},   // per-floor hash of the last image we synced, to skip resending unchanged images
+  // === SAFETY FLAGS (v33-dev) ===
+  // Prevents the wipe-on-load race: don't allow any write until onSnapshot has
+  // fired at least once for each collection this role subscribes to. Otherwise
+  // a CDT user loading the app could trigger an auto-save in the 1-3s window
+  // before /cdtPlan arrived, pushing an empty STATE up to cloud and wiping
+  // data. This was the root cause of the May/Jun 2026 Plan CDT + %Actual loss.
+  floorsSyncedOnce: false,
+  cdtPlanSyncedOnce: false,
 };
 
 function setCloudStatus(state, text){
@@ -6628,7 +6642,7 @@ function mergeCdtPlanIntoFloor(floor, cdtDoc){
 
 async function cloudPushAll(){
   if(!window.FB || !window.FB.ready){ alert('Cloud not ready yet.'); return; }
-  if(!ROLE.isCDT()){ alert('Only CDT can push.'); return; }
+  if(!ROLE.isAdmin()){ alert('Chỉ Admin mới có thể Push to Cloud.'); return; }
   try{
     setCloudStatus('saving','Pushing all…');
     const { db, doc, setDoc, collection, getDocs, deleteDoc } = window.FB;
@@ -6662,6 +6676,21 @@ function scheduleCloudSave(){
   if(!window.FB || !window.FB.ready) return;
   if(CLOUD.applyingRemote) return;
   if(!ROLE.current) return;   // wait until user picked a role
+
+  // === SAFETY GUARD (v33-dev): block writes until first cloud snapshot has arrived ===
+  // Without this, a user loading the app could trigger an auto-save in the
+  // 1-3s window before /floors or /cdtPlan onSnapshot fires, pushing an empty
+  // STATE up to cloud and wiping data that was already there. This was the
+  // root cause of the May/Jun 2026 Plan CDT + %Actual loss incident.
+  if(!CLOUD.floorsSyncedOnce){
+    setCloudStatus('connecting','🔒 Waiting for sync…');
+    return;
+  }
+  if(ROLE.canEditCDT() && !CLOUD.cdtPlanSyncedOnce){
+    setCloudStatus('connecting','🔒 Waiting for CDT sync…');
+    return;
+  }
+
   if(CLOUD.saveTimer) clearTimeout(CLOUD.saveTimer);
   setCloudStatus('saving','Saving…');
   CLOUD.saveTimer = setTimeout(async () => {
@@ -6669,13 +6698,39 @@ function scheduleCloudSave(){
       const { db, doc, setDoc } = window.FB;
       const cf = currentFloor();
 
-      // Only CDT can write to /meta and /cdtPlan
-      if(ROLE.isCDT()){
+      // CDT and Admin both can write /meta + /cdtPlan
+      if(ROLE.canEditCDT()){
         await setDoc(doc(db,'projects', CLOUD.PROJECT_ID,'meta','main'), buildMetaDoc());
-        if(cf) await setDoc(doc(db,'projects', CLOUD.PROJECT_ID,'cdtPlan', cf.id), buildCdtPlanDoc(cf));
+        if(cf){
+          // === DEFENSIVE CHECK (v33-dev): skip /cdtPlan write if floor has areas
+          // but ALL Plan CDT fields are empty. Catches the case where STATE.floors
+          // got out of sync (e.g. cdtPlan onSnapshot disconnected mid-session) and
+          // we'd otherwise wipe cloud data. Legitimate "all empty" only happens on
+          // freshly-created floors with no areas yet — those pass the check via
+          // hasAreas=false and save normally.
+          const hasAreas = (cf.areas||[]).length > 0;
+          let hasAnyCdtData = false;
+          if(hasAreas){
+            outer: for(const a of cf.areas){
+              for(const k of Object.keys(a.tasks||{})){
+                const t = a.tasks[k];
+                if(t.planStartCDT || t.planEndCDT ||
+                   (Array.isArray(t.planStartCDTHistory) && t.planStartCDTHistory.length) ||
+                   (Array.isArray(t.planEndCDTHistory)   && t.planEndCDTHistory.length)){
+                  hasAnyCdtData = true; break outer;
+                }
+              }
+            }
+          }
+          if(!hasAreas || hasAnyCdtData){
+            await setDoc(doc(db,'projects', CLOUD.PROJECT_ID,'cdtPlan', cf.id), buildCdtPlanDoc(cf));
+          } else {
+            console.warn('[SAFETY] Skipped /cdtPlan save: all CDT data empty for floor', cf.id, cf.name);
+          }
+        }
       }
 
-      // Both CDT and NT can write to /floors (NT edits Plan NT + Actual)
+      // CDT, NT, and Admin all can write to /floors (NT edits Plan NT + Actual)
       if(cf){
         await setDoc(doc(db,'projects', CLOUD.PROJECT_ID,'floors', cf.id), buildFloorDoc(cf));
         CLOUD.lastFloorImageHash[cf.id] = strHash(cf.image||'');
@@ -6701,9 +6756,9 @@ async function cloudLoadAndSubscribe(){
       setCloudStatus('error','Cloud is empty — use “Push to Cloud”');
       return false;
     }
-    // For CDT: also fetch /cdtPlan and merge into floors before applying
+    // For CDT/Admin: also fetch /cdtPlan and merge into floors before applying
     let cdtPlanMap = {};
-    if(ROLE.isCDT()){
+    if(ROLE.canEditCDT()){
       try{
         const cdtSnap = await getDocs(collection(db,'projects', CLOUD.PROJECT_ID,'cdtPlan'));
         cdtSnap.forEach(d => { cdtPlanMap[d.id] = d.data(); });
@@ -6744,10 +6799,13 @@ async function cloudLoadAndSubscribe(){
             render();
           }
         });
+        // Mark floors as fully synced after first snapshot — unblocks autosave.
+        CLOUD.floorsSyncedOnce = true;
       })
     );
-    // CDT-only: subscribe to cdtPlan changes
-    if(ROLE.isCDT()){
+    // CDT and Admin both subscribe to cdtPlan changes (Admin needs to see and
+    // write Plan CDT dates too; Admin is a superset of CDT for editing).
+    if(ROLE.canEditCDT()){
       CLOUD.unsubscribes.push(
         onSnapshot(collection(db,'projects', CLOUD.PROJECT_ID,'cdtPlan'), snap => {
           snap.docChanges().forEach(ch => {
@@ -6756,6 +6814,8 @@ async function cloudLoadAndSubscribe(){
               if(f){ mergeCdtPlanIntoFloor(f, ch.doc.data()); render(); }
             }
           });
+          // Mark cdtPlan as fully synced after first snapshot — unblocks save.
+          CLOUD.cdtPlanSyncedOnce = true;
         })
       );
 
@@ -6881,8 +6941,8 @@ function applyRemoteFloor(f){
     (f.areas||[]).forEach(a => ensureAreaTasks(a));
     const idx = STATE.floors.findIndex(x => x.id === f.id);
     // Preserve CDT-only plan dates that we already have locally (the public /floors
-    // collection never carries them; only /cdtPlan does).
-    if(ROLE.isCDT() && idx !== -1){
+    // collection never carries them; only /cdtPlan does). Applies to CDT and Admin.
+    if(ROLE.canEditCDT() && idx !== -1){
       const oldFloor = STATE.floors[idx];
       const oldByArea = {};
       (oldFloor.areas||[]).forEach(a => { oldByArea[a.id] = a; });
@@ -6945,13 +7005,34 @@ function updateRoleUI(){
 }
 
 function applyRolePermissions(){
-  // Admin gets everything; CDT gets dates+%; NT gets just NT plan + actual %.
+  // Admin gets everything; CDT gets dates+% (per-cell edits via auto-save);
+  // NT gets just NT plan + actual %.
   const ntOnly = ROLE.isNT();
   const isAdmin = ROLE.isAdmin();
-  // Anything that mutates the project (push, floor management, image swap,
-  // cleanup, history reset) is for CDT or Admin. NT sees a read-mostly view.
-  const hideForNT = ['cloudPushBtn','addFloorBtn','renameFloorBtn','dupFloorBtn','delFloorBtn','copyAreasBtn','cleanupFloorsBtn','resetHistoryBtn','reloadCloudBtn','loadImageBtn','clearImageBtn','loadBtn'];
-  hideForNT.forEach(id => { const el = $(id); if(el) el.style.display = ntOnly ? 'none' : ''; });
+
+  // === ADMIN-ONLY (v33-dev, per user request) ===
+  // Bulk / destructive / project-level ops that can wipe cloud data or
+  // destabilize multi-user state. Restricted to Admin to prevent the
+  // May/Jun 2026 data loss incident from recurring. CDT and NT still get
+  // per-cell auto-save for routine editing (Plan dates, %Actual, etc.) —
+  // they just can't trigger Import, Export, manual Push, project Save/Load,
+  // floor-image Load/Clear, or force-reload-cloud.
+  const adminOnly = [
+    'exportExcelBtn',   // Excel export
+    'importExcelBtn',   // Excel import
+    'saveBtn',          // Save project to file
+    'loadBtn',          // Load project from file
+    'loadImageBtn',     // Load floor-plan image / PDF
+    'clearImageBtn',    // Clear floor-plan image
+    'cloudPushBtn',     // Manual cloud push (overwrites cloud)
+    'reloadCloudBtn',   // Force reload from cloud
+    'addFloorBtn', 'renameFloorBtn', 'dupFloorBtn', 'delFloorBtn',
+    'copyAreasBtn', 'cleanupFloorsBtn', 'resetHistoryBtn',
+    'dashExcelBtn',     // Dashboard Excel export
+    'dashPdfBtn',       // Dashboard PDF report
+  ];
+  adminOnly.forEach(id => { const el = $(id); if(el) el.style.display = isAdmin ? '' : 'none'; });
+
   // Polygon editing (Draw / Edit / Move modes) belongs ONLY to Admin. CDT can
   // still tap polygons to inspect a unit; they just can't reshape one.
   ['draw','edit','move'].forEach(mode => {
@@ -6961,10 +7042,10 @@ function applyRolePermissions(){
   document.body.classList.toggle('role-nt', ntOnly);
   document.body.classList.toggle('role-cdt', ROLE.isCDT());
   document.body.classList.toggle('role-admin', isAdmin);
-  // Plan view switch is for CDT (toggling between their own plan and NT's).
-  // Admin also gets it since they have full control over both plans.
+  // Plan view switch (CDT/NT toggle) — shown for CDT and Admin (both can
+  // toggle between Plan CDT and Plan NT views).
   const pv = $('planViewSwitch');
-  if(pv) pv.style.display = (ROLE.isCDT() || isAdmin) ? '' : 'none';
+  if(pv) pv.style.display = ROLE.canEditCDT() ? '' : 'none';
   if(ntOnly) PLAN_VIEW = 'nt';
   else if(!PLAN_VIEW) PLAN_VIEW = 'cdt';
 }
@@ -7116,9 +7197,9 @@ function boot(){
     });
   });
 
-  // Wire push button (CDT only — also enforced server-side)
+  // Wire push button (Admin only — also enforced server-side)
   $('cloudPushBtn').addEventListener('click', () => {
-    if(!ROLE.isCDT()){ alert('Only CDT can push to cloud.'); return; }
+    if(!ROLE.isAdmin()){ alert('Chỉ Admin mới có thể Push to Cloud.'); return; }
     if(confirm('Push the current local state to the cloud? This OVERWRITES the cloud copy with what you see here.')) cloudPushAll();
   });
 
