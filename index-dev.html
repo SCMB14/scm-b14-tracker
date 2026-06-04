@@ -1503,6 +1503,10 @@
           <span>Color by Task (not Status)</span>
           <div class="toggle" data-toggle="colorByTask"></div>
         </div>
+        <div class="toggle-row" title="Gom các zone cùng căn (vd A14.06-LIVING, A14.06-WC1, A14.06-YARD) thành 1 label trên canvas. Sidebar vẫn giữ nguyên từng zone.">
+          <span>🏠 Group by apartment</span>
+          <div class="toggle" data-toggle="groupByApartment"></div>
+        </div>
       </div>
       <div class="label-size-row">
         <label>Label size</label>
@@ -3179,6 +3183,7 @@ const STATE = {
     showLeader: true,
     colorByTask: false,
     compareMode: false,
+    groupByApartment: false,
   },
   cutoffDate: '',
   labelScale: 1,   // user-adjustable label size multiplier
@@ -4902,15 +4907,143 @@ function escapeHtml(s){
   return String(s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 }
 
+/* =============================================================
+   APARTMENT GROUPING (v34)
+   When the "Group by apartment" toggle is ON, areas sharing the same
+   apartment prefix (everything before the first '-' in their name) are
+   collapsed into ONE label on the canvas, with aggregated dates and %.
+   The sidebar list is unaffected — it still shows each zone individually
+   so per-zone editing remains possible. Clicking a polygon still selects
+   that single zone (not the whole apartment).
+============================================================= */
+
+// Apartment ID = portion of the area name before the first '-'.
+// e.g. apartmentOf('A14.06-LIVING') === 'A14.06'
+// If there is no '-' in the name, the whole name is its own apartment.
+function apartmentOf(name){
+  if(!name) return '';
+  const i = name.indexOf('-');
+  return i === -1 ? name : name.slice(0, i);
+}
+
+// Sort YYYY-MM-DD strings lexically (ISO dates are lexically comparable).
+// Returns earliest valid date, or '' if list has no non-empty entries.
+function _aggMin(list){
+  const v = list.filter(Boolean);
+  return v.length ? v.slice().sort()[0] : '';
+}
+function _aggMax(list){
+  const v = list.filter(Boolean);
+  return v.length ? v.slice().sort()[v.length-1] : '';
+}
+
+// Aggregate ONE trade across multiple zones of one apartment. Returns a
+// task-like object that drop-in-replaces a single zone's `area.tasks[k]`
+// when read by getAreaDisplayColor, renderExternalLabel, calcTaskStatus, etc.
+// Dates use MIN-for-starts, MAX-for-ends. % is the mean of non-N/A zones.
+// Actual End is only set when EVERY zone has actualEnd (apartment is fully
+// finished); otherwise blank so the apartment isn't marked Done prematurely.
+function aggregateTaskAcrossAreas(zones, taskKey){
+  const tasks = zones.map(z => {
+    ensureAreaTasks(z);
+    return z.tasks[taskKey];
+  }).filter(t => t && !t.na);
+  if(tasks.length === 0) return {na: true};
+
+  const actualEnds = tasks.map(t => t.actualEnd);
+  const allFinished = actualEnds.every(Boolean);
+  const avgPct = tasks.reduce((s,t) => s + (Number(t.percentActual)||0), 0) / tasks.length;
+
+  return {
+    na: false,
+    planStartCDT: _aggMin(tasks.map(t => t.planStartCDT)),
+    planEndCDT:   _aggMax(tasks.map(t => t.planEndCDT)),
+    planStartNT:  _aggMin(tasks.map(t => t.planStartNT)),
+    planEndNT:    _aggMax(tasks.map(t => t.planEndNT)),
+    actualStart:  _aggMin(tasks.map(t => t.actualStart)),
+    actualEnd:    allFinished ? _aggMax(actualEnds) : '',
+    percentActual: avgPct,
+    // No history aggregation for v1 — revisions only appear in detail panel
+    planStartCDTHistory: [],
+    planEndCDTHistory: [],
+    planStartNTHistory: [],
+    planEndNTHistory: [],
+  };
+}
+
+// Build a synthetic "area" representing an apartment group. Its .points is a
+// 4-corner box covering all zones' bounding box — used only by polyBounds /
+// polyCentroid for label placement. The synthetic area is never drawn as a
+// polygon; only its label is rendered.
+function makeAggregateArea(zones, aptId){
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  zones.forEach(z => z.points.forEach(p => {
+    if(p.x < minX) minX = p.x;
+    if(p.y < minY) minY = p.y;
+    if(p.x > maxX) maxX = p.x;
+    if(p.y > maxY) maxY = p.y;
+  }));
+  const points = [{x:minX,y:minY},{x:maxX,y:minY},{x:maxX,y:maxY},{x:minX,y:maxY}];
+  const tasks = {};
+  TASKS.forEach(t => { tasks[t.key] = aggregateTaskAcrossAreas(zones, t.key); });
+  // The id prefix '__apt__' ensures it can't collide with a real area id.
+  // The label-drag handler does `STATE.areas.find(a => a.id === ld.areaId)`
+  // which returns undefined for this id, so drag silently no-ops — exactly
+  // what we want, since aggregate labels are regenerated every render.
+  return {
+    id: '__apt__' + aptId,
+    name: aptId,
+    points,
+    labelOffset: null,
+    tasks,
+    __isAggregate: true,
+  };
+}
+
+// Group current floor's areas by apartment. Returns a Map<aptId, zones[]>
+// preserving the order in which each apartment was first encountered.
+function groupAreasByApartment(areas){
+  const groups = new Map();
+  areas.forEach(a => {
+    const apt = apartmentOf(a.name) || a.id;
+    if(!groups.has(apt)) groups.set(apt, []);
+    groups.get(apt).push(a);
+  });
+  return groups;
+}
+
 function renderCanvasOnly(){
   while(svgLayer.firstChild) svgLayer.removeChild(svgLayer.firstChild);
 
+  // === APARTMENT GROUPING ===
+  // When grouping is ON, build a color/opacity override map keyed by zone id
+  // (so each zone of the same apartment shares the apartment's aggregate
+  // status color) and collect one synthetic area per apartment to render
+  // a single label per apartment after the polygons.
+  let zoneColorOverride = null;   // Map<zoneId, {color, opacity}> or null
+  let aptLabels = null;            // Array<{agg, color}> or null
+  if(STATE.toggles.groupByApartment){
+    zoneColorOverride = new Map();
+    aptLabels = [];
+    const groups = groupAreasByApartment(STATE.areas);
+    groups.forEach((zones, aptId) => {
+      const agg = makeAggregateArea(zones, aptId);
+      const color = getAreaDisplayColor(agg);
+      const opacity = getAreaDisplayOpacity(agg);
+      zones.forEach(z => zoneColorOverride.set(z.id, {color, opacity}));
+      aptLabels.push({agg, color});
+    });
+  }
+
   STATE.areas.forEach(area => {
     ensureAreaTasks(area);
-    const color = getAreaDisplayColor(area);
+    const ovr = zoneColorOverride ? zoneColorOverride.get(area.id) : null;
+    const color = ovr ? ovr.color : getAreaDisplayColor(area);
+    const fillOp = ovr ? ovr.opacity : getAreaDisplayOpacity(area);
     const isSelected = area.id === STATE.selectedId;
 
-    // POLYGON (fill = status color of current task / aggregate)
+    // POLYGON (fill = status color of current task / aggregate; overridden
+    // by apartment status when grouping is ON)
     const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
     poly.setAttribute('points', pointsToStr(area.points));
     poly.setAttribute('class', 'polygon-shape' + (isSelected ? ' selected' : ''));
@@ -4921,7 +5054,6 @@ function renderCanvasOnly(){
     // an inline style override for these statuses so only the outline shows.
     // Selected polygons keep the default opacity so the user can still see
     // what they've clicked on.
-    const fillOp = getAreaDisplayOpacity(area);
     if(fillOp === 0 && !isSelected){
       poly.style.fillOpacity = '0';
     }
@@ -4945,11 +5077,18 @@ function renderCanvasOnly(){
       });
     }
 
-    // LABEL (external) - white bg, black text
-    if(STATE.toggles.showLabel){
+    // LABEL (external) - white bg, black text.
+    // When grouping is ON, we skip per-zone labels here and instead render
+    // one label per apartment after this forEach (see below).
+    if(STATE.toggles.showLabel && !zoneColorOverride){
       renderExternalLabel(area, color);
     }
   });
+
+  // Apartment labels — one per apartment when grouping is ON.
+  if(aptLabels && STATE.toggles.showLabel){
+    aptLabels.forEach(({agg, color}) => renderExternalLabel(agg, color));
+  }
 
   // Drawing-in-progress
   if(STATE.drawingPoints.length){
