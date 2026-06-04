@@ -4557,13 +4557,27 @@ function onMouseMove(e){
     const dyScreen = e.clientY - ld.startY;
     if(!ld.moved && Math.abs(dxScreen)+Math.abs(dyScreen) > 3) ld.moved = true;
     if(ld.moved){
-      const area = STATE.areas.find(a => a.id === ld.areaId);
-      if(area){
-        area.labelOffset = {
-          dx: ld.origOff.dx + dxScreen / STATE.zoom,
-          dy: ld.origOff.dy + dyScreen / STATE.zoom,
-        };
-        renderCanvasOnly();
+      const newOff = {
+        dx: ld.origOff.dx + dxScreen / STATE.zoom,
+        dy: ld.origOff.dy + dyScreen / STATE.zoom,
+      };
+      // Aggregate apartment labels (id prefix '__apt__') have their offsets
+      // stored at floor level, in apartmentLabelOffsets[aptId] — separate
+      // from zone labelOffset so toggling grouping doesn't move any zone label.
+      if(String(ld.areaId).startsWith('__apt__')){
+        const aptId = ld.areaId.slice('__apt__'.length);
+        const cf = currentFloor();
+        if(cf){
+          if(!cf.apartmentLabelOffsets) cf.apartmentLabelOffsets = {};
+          cf.apartmentLabelOffsets[aptId] = newOff;
+          renderCanvasOnly();
+        }
+      } else {
+        const area = STATE.areas.find(a => a.id === ld.areaId);
+        if(area){
+          area.labelOffset = newOff;
+          renderCanvasOnly();
+        }
       }
     }
     return;
@@ -4608,7 +4622,10 @@ function onMouseUp(e){
   if(STATE.labelDrag){
     const ld = STATE.labelDrag;
     STATE.labelDrag = null;
-    if(!ld.moved && STATE.mode === 'select'){
+    // Aggregate apartment labels (id prefix '__apt__') aren't real areas —
+    // a click on one shouldn't try to select or open a detail panel because
+    // there's no underlying single area to point at. Just dismiss.
+    if(!ld.moved && STATE.mode === 'select' && !String(ld.areaId).startsWith('__apt__')){
       // It was a click on the label, not a drag -> select + open editor
       STATE.selectedId = ld.areaId;
       render();
@@ -4986,17 +5003,22 @@ function makeAggregateArea(zones, aptId){
   const points = [{x:minX,y:minY},{x:maxX,y:minY},{x:maxX,y:maxY},{x:minX,y:maxY}];
   const tasks = {};
   TASKS.forEach(t => { tasks[t.key] = aggregateTaskAcrossAreas(zones, t.key); });
-  // The id prefix '__apt__' ensures it can't collide with a real area id.
-  // The label-drag handler does `STATE.areas.find(a => a.id === ld.areaId)`
-  // which returns undefined for this id, so drag silently no-ops — exactly
-  // what we want, since aggregate labels are regenerated every render.
+  // Look up the apartment label's drag offset (stored per-floor, separately
+  // from zone labelOffset so toggling grouping doesn't move any zone label).
+  const cf = currentFloor();
+  const aptOffsets = (cf && cf.apartmentLabelOffsets) || {};
+  const labelOffset = aptOffsets[aptId] || null;
+  // The id prefix '__apt__' marks this as an aggregate — drag handler routes
+  // writes into floor.apartmentLabelOffsets[aptId] instead of area.labelOffset,
+  // and click handler ignores the id (no detail panel for an apartment).
   return {
     id: '__apt__' + aptId,
     name: aptId,
     points,
-    labelOffset: null,
+    labelOffset,
     tasks,
     __isAggregate: true,
+    __aptId: aptId,
   };
 }
 
@@ -5015,35 +5037,30 @@ function groupAreasByApartment(areas){
 function renderCanvasOnly(){
   while(svgLayer.firstChild) svgLayer.removeChild(svgLayer.firstChild);
 
-  // === APARTMENT GROUPING ===
-  // When grouping is ON, build a color/opacity override map keyed by zone id
-  // (so each zone of the same apartment shares the apartment's aggregate
-  // status color) and collect one synthetic area per apartment to render
-  // a single label per apartment after the polygons.
-  let zoneColorOverride = null;   // Map<zoneId, {color, opacity}> or null
-  let aptLabels = null;            // Array<{agg, color}> or null
-  if(STATE.toggles.groupByApartment){
-    zoneColorOverride = new Map();
+  // === APARTMENT GROUPING (label-only) ===
+  // When grouping is ON, polygon colors are STILL per-zone — each zone keeps
+  // its own status color (delay vs on-time vs done) so the user can spot
+  // problem zones at a glance. The grouping ONLY collapses external labels:
+  // one label per apartment instead of one per zone.
+  const groupingActive = STATE.toggles.groupByApartment;
+  let aptLabels = null;
+  if(groupingActive){
     aptLabels = [];
     const groups = groupAreasByApartment(STATE.areas);
     groups.forEach((zones, aptId) => {
       const agg = makeAggregateArea(zones, aptId);
       const color = getAreaDisplayColor(agg);
-      const opacity = getAreaDisplayOpacity(agg);
-      zones.forEach(z => zoneColorOverride.set(z.id, {color, opacity}));
       aptLabels.push({agg, color});
     });
   }
 
   STATE.areas.forEach(area => {
     ensureAreaTasks(area);
-    const ovr = zoneColorOverride ? zoneColorOverride.get(area.id) : null;
-    const color = ovr ? ovr.color : getAreaDisplayColor(area);
-    const fillOp = ovr ? ovr.opacity : getAreaDisplayOpacity(area);
+    const color = getAreaDisplayColor(area);
+    const fillOp = getAreaDisplayOpacity(area);
     const isSelected = area.id === STATE.selectedId;
 
-    // POLYGON (fill = status color of current task / aggregate; overridden
-    // by apartment status when grouping is ON)
+    // POLYGON (fill = status color of this zone — never affected by grouping)
     const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
     poly.setAttribute('points', pointsToStr(area.points));
     poly.setAttribute('class', 'polygon-shape' + (isSelected ? ' selected' : ''));
@@ -5078,14 +5095,14 @@ function renderCanvasOnly(){
     }
 
     // LABEL (external) - white bg, black text.
-    // When grouping is ON, we skip per-zone labels here and instead render
-    // one label per apartment after this forEach (see below).
-    if(STATE.toggles.showLabel && !zoneColorOverride){
+    // When grouping is ON, we skip per-zone labels; apartment labels are
+    // rendered in a single pass after all polygons.
+    if(STATE.toggles.showLabel && !groupingActive){
       renderExternalLabel(area, color);
     }
   });
 
-  // Apartment labels — one per apartment when grouping is ON.
+  // Apartment-level labels — one per apartment.
   if(aptLabels && STATE.toggles.showLabel){
     aptLabels.forEach(({agg, color}) => renderExternalLabel(agg, color));
   }
@@ -6907,6 +6924,9 @@ function buildFloorDoc(f){
     imgW: f.imgW || 0,
     imgH: f.imgH || 0,
     areas: stripCDTFromAreas(f.areas),
+    // Persist apartment label drag positions (v34, apartment grouping feature).
+    // Stored at floor level so toggling group on/off doesn't move zone labels.
+    apartmentLabelOffsets: f.apartmentLabelOffsets || {},
     updatedAt: new Date().toISOString(),
   };
 }
