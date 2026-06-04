@@ -1672,6 +1672,45 @@
   </div>
 </div>
 
+<!-- PDF MULTI-PAGE MODE picker (v34: appears only when uploaded PDF has >1 page) -->
+<div class="modal-overlay" id="pdfModeModal">
+  <div class="modal" style="width:min(520px,92vw)">
+    <h2>PDF nhiều trang</h2>
+    <div class="modal-hint">
+      File PDF có <strong id="pdfModeNumPages">?</strong> trang.
+      Chọn cách xử lý cho floor hiện tại:
+    </div>
+    <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:14px">
+      <label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer;padding:8px;border:1px solid var(--border);border-radius:6px">
+        <input type="radio" name="pdfMode" value="combine-2x2" checked style="margin-top:3px">
+        <div><b>🔲 Ghép thành 1 mặt bằng — Grid 2×2</b><br><small style="color:var(--muted)">Phù hợp khi mặt bằng vuông, chia 4 góc (4 trang)</small></div>
+      </label>
+      <label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer;padding:8px;border:1px solid var(--border);border-radius:6px">
+        <input type="radio" name="pdfMode" value="combine-1xN" style="margin-top:3px">
+        <div><b>▭ Ghép thành 1 mặt bằng — Hàng ngang</b><br><small style="color:var(--muted)">Phù hợp mặt bằng dài, panoramic</small></div>
+      </label>
+      <label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer;padding:8px;border:1px solid var(--border);border-radius:6px">
+        <input type="radio" name="pdfMode" value="combine-Nx1" style="margin-top:3px">
+        <div><b>▯ Ghép thành 1 mặt bằng — Cột dọc</b><br><small style="color:var(--muted)">Phù hợp mặt bằng cao</small></div>
+      </label>
+      <label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer;padding:8px;border:1px solid var(--border);border-radius:6px">
+        <input type="radio" name="pdfMode" value="multi-floor" style="margin-top:3px">
+        <div><b>📚 Tạo nhiều floor (1 trang = 1 floor)</b><br><small style="color:var(--muted)">Phù hợp khi mỗi trang là 1 tầng khác nhau</small></div>
+      </label>
+      <label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer;padding:8px;border:1px solid var(--border);border-radius:6px">
+        <input type="radio" name="pdfMode" value="single" style="margin-top:3px">
+        <div><b>📄 Chỉ dùng 1 trang:</b>
+          <select id="pdfModeSinglePage" style="margin-left:6px;padding:3px 8px;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:4px"></select>
+          <br><small style="color:var(--muted)">Bỏ qua các trang khác</small></div>
+      </label>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" id="pdfModeCancel">Cancel</button>
+      <button class="btn primary" id="pdfModeOK">OK</button>
+    </div>
+  </div>
+</div>
+
 <script>
 /* =============================================================
    TASKS DEFINITION
@@ -3260,46 +3299,171 @@ async function setFloorImage(dataUrl){
   renderFloorSelect();
 }
 
-// Render page 1 of a PDF to a PNG data URL and use it as the floor image
-function loadPdfAsImage(file){
+// Render a single PDF page to a canvas at the given scale, with white background.
+async function renderPdfPageToCanvas(page, scale){
+  const viewport = page.getViewport({scale});
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  await page.render({canvasContext: ctx, viewport}).promise;
+  return canvas;
+}
+
+// Show a modal asking how to handle a multi-page PDF. Resolves with an object
+// {mode, pageNumber?} or null if user cancelled.
+function askPdfMultiPageMode(numPages){
+  return new Promise(resolve => {
+    const modal = $('pdfModeModal');
+    $('pdfModeNumPages').textContent = numPages;
+    // Populate page dropdown for the "single page" option
+    const sel = $('pdfModeSinglePage');
+    sel.innerHTML = '';
+    for(let i = 1; i <= numPages; i++){
+      const opt = document.createElement('option');
+      opt.value = i;
+      opt.textContent = `Trang ${i}`;
+      sel.appendChild(opt);
+    }
+    // Reset to default selection
+    const def = modal.querySelector('input[name="pdfMode"][value="combine-2x2"]');
+    if(def) def.checked = true;
+    modal.classList.add('show');
+    const cleanup = () => {
+      modal.classList.remove('show');
+      $('pdfModeOK').removeEventListener('click', onOK);
+      $('pdfModeCancel').removeEventListener('click', onCancel);
+    };
+    const onOK = () => {
+      const mode = (modal.querySelector('input[name="pdfMode"]:checked')||{}).value || 'combine-2x2';
+      const result = (mode === 'single')
+        ? {mode:'single', pageNumber: parseInt(sel.value)||1}
+        : {mode};
+      cleanup();
+      resolve(result);
+    };
+    const onCancel = () => { cleanup(); resolve(null); };
+    $('pdfModeOK').addEventListener('click', onOK);
+    $('pdfModeCancel').addEventListener('click', onCancel);
+  });
+}
+
+// Combine all pages of a PDF into one large canvas, arranged according to mode.
+// mode: 'combine-2x2' | 'combine-1xN' | 'combine-Nx1'
+async function combinePdfPagesToImage(pdf, mode){
+  const numPages = pdf.numPages;
+  // Use a lower scale for multi-page to keep total bitmap manageable. Firestore
+  // has a 1MiB/field limit; setFloorImage further shrinks if needed.
+  const scale = numPages <= 2 ? 1.5 : 1.0;
+  // Render all pages first
+  const canvases = [];
+  for(let i = 1; i <= numPages; i++){
+    const page = await pdf.getPage(i);
+    canvases.push(await renderPdfPageToCanvas(page, scale));
+  }
+  // Determine grid dimensions
+  let cols, rows;
+  if(mode === 'combine-1xN'){ cols = numPages; rows = 1; }
+  else if(mode === 'combine-Nx1'){ cols = 1; rows = numPages; }
+  else { // 2x2 (square-ish grid)
+    cols = Math.ceil(Math.sqrt(numPages));
+    rows = Math.ceil(numPages / cols);
+  }
+  // Cell size = max of page dims (so non-uniform pages still align)
+  let cellW = 0, cellH = 0;
+  canvases.forEach(c => { cellW = Math.max(cellW, c.width); cellH = Math.max(cellH, c.height); });
+  // Build the combined canvas
+  const combined = document.createElement('canvas');
+  combined.width = cellW * cols;
+  combined.height = cellH * rows;
+  const ctx = combined.getContext('2d');
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, combined.width, combined.height);
+  canvases.forEach((c, i) => {
+    const r = Math.floor(i / cols);
+    const col = i % cols;
+    // Center each page within its cell so smaller pages aren't stretched
+    const x = col * cellW + (cellW - c.width) / 2;
+    const y = r * cellH + (cellH - c.height) / 2;
+    ctx.drawImage(c, x, y);
+  });
+  return combined.toDataURL('image/jpeg', 0.85);
+}
+
+// Create one new floor per PDF page, placing them after the current floor.
+// Used when each page is a separate floor plan rather than tiles of one.
+async function createFloorsFromPdfPages(pdf, baseName){
+  if(!ROLE.isAdmin()){ alert('Chỉ Admin mới có thể thêm floor.'); return; }
+  const baseN = (baseName||'PDF').replace(/\.pdf$/i, '');
+  const numPages = pdf.numPages;
+  const newFloors = [];
+  for(let i = 1; i <= numPages; i++){
+    const page = await pdf.getPage(i);
+    const canvas = await renderPdfPageToCanvas(page, 1.5);
+    const imgUrl = canvas.toDataURL('image/jpeg', 0.85);
+    // Spread the IDs across milliseconds so they're guaranteed unique even
+    // when the loop runs fast.
+    await new Promise(r => setTimeout(r, 2));
+    const f = makeFloor(`${baseN} - p${i}`, imgUrl);
+    STATE.floors.push(f);
+    newFloors.push(f);
+  }
+  // Switch to the first newly-created floor so user sees the result
+  if(newFloors.length){
+    switchToFloor(newFloors[0].id);
+  }
+  render();
+}
+
+// Top-level PDF handler. Single-page PDFs render straight to floor image (old
+// behavior). Multi-page PDFs show a chooser so user can pick how to combine.
+async function loadPdfAsImage(file){
   if(typeof pdfjsLib === 'undefined'){
     alert('PDF support needs an internet connection (the PDF reader library is loaded online). '
       + 'Please connect to the internet and try again, or convert the PDF page to a PNG/JPG and upload that instead.');
     return;
   }
-  const reader = new FileReader();
-  reader.onload = function(){
-    const typedarray = new Uint8Array(this.result);
-    try{
-      pdfjsLib.GlobalWorkerOptions.workerSrc =
-        'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-    }catch(e){}
-    pdfjsLib.getDocument({data: typedarray}).promise.then(pdf => {
-      return pdf.getPage(1);
-    }).then(page => {
-      // Render at a moderate scale — large elevation/plan PDFs at 2.5× were
-      // producing 5-10 MB PNGs that always failed Firestore's 1 MiB field
-      // limit. 1.5× keeps lines readable while keeping the source bitmap
-      // smaller; setFloorImage will further shrink if needed.
-      const scale = 1.5;
-      const viewport = page.getViewport({scale});
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
-      canvas.width = viewport.width;
-      canvas.height = viewport.height;
-      // White background so JPEG conversion later doesn't pick up black
-      // where the PDF leaves transparent pixels.
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      return page.render({canvasContext: ctx, viewport}).promise.then(() => {
-        setFloorImage(canvas.toDataURL('image/jpeg', 0.85));
-      });
-    }).catch(err => {
-      alert('Could not read that PDF: ' + err.message
-        + '\n\nTip: you can also export the plan page as PNG/JPG and upload the image instead.');
-    });
-  };
-  reader.readAsArrayBuffer(file);
+  try{
+    pdfjsLib.GlobalWorkerOptions.workerSrc =
+      'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  }catch(e){}
+  let pdf;
+  try{
+    const arrayBuffer = await file.arrayBuffer();
+    pdf = await pdfjsLib.getDocument({data: new Uint8Array(arrayBuffer)}).promise;
+  } catch(err){
+    alert('Could not read that PDF: ' + (err && err.message ? err.message : 'unknown error')
+      + '\n\nTip: you can also export the plan page as PNG/JPG and upload the image instead.');
+    return;
+  }
+  const numPages = pdf.numPages;
+  if(numPages === 1){
+    // Old behavior — single page renders straight in (scale 1.5, JPEG 0.85)
+    const page = await pdf.getPage(1);
+    const canvas = await renderPdfPageToCanvas(page, 1.5);
+    setFloorImage(canvas.toDataURL('image/jpeg', 0.85));
+    return;
+  }
+  // Multi-page — ask user how to handle it
+  const choice = await askPdfMultiPageMode(numPages);
+  if(!choice) return;   // user cancelled
+  try{
+    if(choice.mode === 'single'){
+      const page = await pdf.getPage(choice.pageNumber);
+      const canvas = await renderPdfPageToCanvas(page, 1.5);
+      setFloorImage(canvas.toDataURL('image/jpeg', 0.85));
+    } else if(choice.mode === 'multi-floor'){
+      await createFloorsFromPdfPages(pdf, file.name);
+    } else {
+      const dataUrl = await combinePdfPagesToImage(pdf, choice.mode);
+      setFloorImage(dataUrl);
+    }
+  } catch(err){
+    alert('Lỗi khi xử lý PDF: ' + (err && err.message ? err.message : 'unknown error'));
+    console.error(err);
+  }
 }
 
 function makeFloor(name, image){
