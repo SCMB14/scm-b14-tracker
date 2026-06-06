@@ -1268,6 +1268,112 @@
   .collapsed .collapse-btn{transform:rotate(-90deg)}
   .sidebar-section.collapsed .collapsible-content{display:none}
   .collapsible-content{display:block}
+  /* ============================================================
+     MOBILE RESPONSIVE (v34)
+     The app was built for desktop. On phones (<768px wide) the
+     fixed 360px sidebar + detail panel layout doesn't fit, so we:
+       • collapse the sidebar into a slide-in drawer (hidden by
+         default, opened via the ☰ hamburger button in the header)
+       • let the canvas take the full screen width
+       • blow up the detail panel to nearly the full screen so
+         editing %actual / dates on site is comfortable
+       • make tap targets larger (buttons ≥ 36px tall)
+     Workflow on site: pick floor → tap polygon → edit %actual → close → next.
+  ============================================================ */
+  .hamburger-btn{
+    display:none;
+    background:var(--panel-2);
+    border:1px solid var(--border);
+    color:var(--text);
+    width:36px;height:36px;
+    border-radius:6px;cursor:pointer;
+    font-size:18px;line-height:1;
+    align-items:center;justify-content:center;
+  }
+  .hamburger-btn:hover{border-color:var(--accent);color:var(--accent)}
+  .sidebar-backdrop{
+    display:none;
+    position:fixed;inset:0;
+    background:rgba(0,0,0,.55);
+    z-index:48;
+  }
+  .sidebar-backdrop.show{display:block}
+
+  @media (max-width: 768px){
+    body{font-size:14px}
+    header{
+      padding:6px 8px;gap:8px;flex-wrap:nowrap;
+      overflow-x:auto;
+    }
+    .logo{font-size:18px}
+    .subtitle{display:none}
+    .hamburger-btn{display:inline-flex;flex-shrink:0}
+    .toolbar{
+      gap:4px;
+      flex-wrap:nowrap;
+      overflow-x:auto;
+      scrollbar-width:none;
+    }
+    .toolbar::-webkit-scrollbar{display:none}
+    .btn{padding:8px 10px;font-size:11px;min-height:36px}
+
+    /* Sidebar becomes a slide-in drawer */
+    aside{
+      position:fixed;
+      top:0;left:0;
+      width:300px;max-width:88vw;
+      height:100vh;
+      z-index:50;
+      transform:translateX(-100%);
+      transition:transform .25s ease-out;
+      box-shadow:4px 0 24px rgba(0,0,0,.5);
+    }
+    aside.open{transform:translateX(0)}
+
+    /* Canvas takes whole screen */
+    main{flex-direction:column}
+    .canvas-wrap{flex:1;min-height:0}
+
+    /* Detail panel = near-full-screen overlay on mobile so editing is easy */
+    .detail-panel{
+      width:100%;
+      max-width:100vw;
+      border-left:none;
+      border-top:2px solid var(--accent);
+      z-index:40;
+    }
+    .detail-field input{
+      padding:12px;
+      font-size:16px;   /* ≥16px prevents iOS auto-zoom on focus */
+      min-height:44px;
+    }
+    .detail-tab{padding:8px 4px;font-size:11px;min-height:44px}
+    .detail-close{width:36px;height:36px;font-size:22px}
+
+    /* Modals tighter on phone */
+    .modal{width:95vw;max-width:95vw;border-radius:8px}
+    .modal-body{padding:12px}
+    .modal input,.modal select{padding:10px;font-size:16px}
+    .role-btn{padding:14px 8px}
+
+    /* Cloud status pill stays visible but shrinks */
+    .cloud-status{min-width:84px;font-size:10px;padding:5px 8px}
+
+    /* Zoom buttons larger for touch */
+    .zoom-controls button{width:44px;height:44px;font-size:18px}
+  }
+
+  @media (max-width: 480px){
+    .logo{font-size:16px}
+    .role-badge{font-size:10px;padding:4px 8px}
+    .plan-view-switch{padding:2px 4px}
+    .pv-btn{padding:4px 6px;font-size:10px}
+    .btn{padding:6px 8px;font-size:10px}
+    /* Hide the cloud-status pill text on tiny screens; keep just the dot */
+    .cloud-status #cloudText{display:none}
+    .cloud-status{min-width:auto;padding:6px}
+  }
+
 </style>
 </head>
 <body>
@@ -1277,6 +1383,7 @@
 </div>
 
 <header>
+  <button class="hamburger-btn" id="hamburgerBtn" title="Mở/đóng menu" aria-label="Toggle sidebar">☰</button>
   <div class="logo">SCM<span>·B14</span> PROGRESS</div>
   <div class="subtitle">Multi-Task<br>Construction Tracker</div>
   <div style="font-size:11px;color:#000;background:var(--green);padding:3px 10px;border-radius:12px;font-weight:700;font-family:var(--font-mono)">v32</div>
@@ -1419,6 +1526,8 @@
     </div>
   </div>
 </div>
+
+<div class="sidebar-backdrop" id="sidebarBackdrop"></div>
 
 <main>
   <aside>
@@ -1579,33 +1688,14 @@
       </div>
     </div>
 
-    <!-- AREAS LIST -->
-    <div class="sidebar-section" style="display:flex;flex-direction:column;padding:0 0 6px 0">
-      <h3 style="padding:10px 14px 0">Areas (<span id="areaCount">0</span>)</h3>
-      <div style="padding:6px 14px 0;display:flex;gap:6px;align-items:center">
-        <label style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;white-space:nowrap">Sort:</label>
-        <select id="sortSelect" style="flex:1;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:4px 6px;border-radius:3px;font-size:10px;font-family:var(--font-body)">
-          <option value="manual">Draw order</option>
-          <option value="name-asc">Name A → Z</option>
-          <option value="name-desc">Name Z → A</option>
-          <option value="status">Status (worst first)</option>
-          <option value="plan-start">Plan Start (earliest)</option>
-          <option value="plan-end">Plan End / Deadline</option>
-          <option value="actual-desc">Actual % (high → low)</option>
-          <option value="actual-asc">Actual % (low → high)</option>
-        </select>
-      </div>
-      <div style="padding:6px 14px 0">
-        <input type="text" id="filterInput" placeholder="🔍 Filter by name..." style="width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:3px;font-size:11px;font-family:var(--font-body)">
-      </div>
-      <div class="areas-list" id="areasList" style="margin-top:6px">
-        <div class="empty-state">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polygon points="3 6 9 3 15 6 21 3 21 18 15 21 9 18 3 21 3 6"/></svg>
-          <div>No areas yet</div>
-          <div style="margin-top:5px">Click "Draw" mode and start clicking on the floor plan to outline an area</div>
-        </div>
-      </div>
-    </div>
+    <!-- AREAS LIST removed v34 — detail panel on the right is the editing surface;
+         the left list duplicated info and made sidebar scrolling tedious.
+         Element kept (hidden) so existing event wiring + innerHTML writes
+         stay alive without null checks. -->
+    <input type="hidden" id="filterInput" value="">
+    <input type="hidden" id="sortSelect" value="manual">
+    <div id="areasList" style="display:none"></div>
+    <span id="areaCount" style="display:none"></span>
   </aside>
 
   <div class="canvas-wrap" id="canvasWrap">
@@ -3983,6 +4073,26 @@ function init(){
   $('copyAreasBtn').addEventListener('click', copyAreasToFloors);
   $('cleanupFloorsBtn').addEventListener('click', cleanupEmptyFloors);
   $('resetHistoryBtn').addEventListener('click', resetPlanHistory);
+
+  // Mobile sidebar drawer toggle. Hamburger button is only visible at <=768px
+  // wide (CSS); on desktop the sidebar is permanently in the layout so this
+  // does nothing. Backdrop click also dismisses the drawer.
+  const _sidebar = document.querySelector('aside');
+  const _backdrop = $('sidebarBackdrop');
+  const _toggleSidebar = (open) => {
+    if(!_sidebar) return;
+    const should = (open !== undefined) ? open : !_sidebar.classList.contains('open');
+    _sidebar.classList.toggle('open', should);
+    if(_backdrop) _backdrop.classList.toggle('show', should);
+  };
+  $('hamburgerBtn').addEventListener('click', () => _toggleSidebar());
+  if(_backdrop) _backdrop.addEventListener('click', () => _toggleSidebar(false));
+  // Auto-close drawer when user picks a floor on mobile (so they immediately
+  // see the canvas and can tap an area to edit).
+  $('floorSelect').addEventListener('change', () => {
+    if(window.innerWidth <= 768) _toggleSidebar(false);
+  });
+
   $('reloadCloudBtn').addEventListener('click', async () => {
     if(!confirm('Discard any unsaved local changes and reload everything from the cloud?')) return;
     // Unsubscribe and re-fetch
@@ -6418,7 +6528,7 @@ function exportExcel(){
   ];
   XLSX.utils.book_append_sheet(wb, wsIP, 'Initial Plan');
 
-  const roleTag = ROLE.isCDT() ? 'CDT' : 'NT';
+  const roleTag = ROLE.canEditCDT() ? 'CDT' : 'NT';
   const fname = `SCM-B14-${roleTag}-${new Date().toISOString().slice(0,10)}.xlsx`;
   XLSX.writeFile(wb, fname);
 }
@@ -6426,7 +6536,10 @@ function exportExcel(){
 function importExcel(e){
   const f = e.target.files[0];
   if(!f) return;
-  const isCDT = ROLE.isCDT();
+  // Admin gets the same Plan-CDT write permission as CDT (Admin is a superset
+  // of CDT for editing). Without this, Admin importing an Excel that contains
+  // Plan Start/End CDT columns would silently skip every CDT date in the file.
+  const isCDT = ROLE.canEditCDT();
   const r = new FileReader();
   r.onload = ev => {
     try{
