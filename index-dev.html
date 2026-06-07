@@ -1764,7 +1764,7 @@
   <button class="quick-entry-btn" id="quickEntryBtn" title="Quick Entry — fast per-unit progress input" aria-label="Quick Entry">⚡</button>
   <div class="logo">SCM<span>·B14</span> PROGRESS</div>
   <div class="subtitle">Multi-Task<br>Construction Tracker</div>
-  <div style="font-size:11px;color:#000;background:var(--green);padding:3px 10px;border-radius:12px;font-weight:700;font-family:var(--font-mono)">v37</div>
+  <div style="font-size:11px;color:#000;background:var(--green);padding:3px 10px;border-radius:12px;font-weight:700;font-family:var(--font-mono)">v40</div>
   <div class="toolbar">
     <button class="btn" id="loadImageBtn" title="Load floor plan (image or PDF) for the current floor">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg>
@@ -4245,7 +4245,7 @@ async function resetPlanHistory(){
     try{
       const { db, doc, setDoc } = window.FB;
       for(const f of STATE.floors){
-        await setDoc(doc(db,'projects', CLOUD.PROJECT_ID,'floors', f.id), buildFloorDoc(f));
+        await setDoc(doc(db,'projects', CLOUD.PROJECT_ID,'floors', f.id), buildFloorDoc(f), {merge:true});
       }
       setCloudStatus('synced','History reset');
     } catch(err){
@@ -8070,6 +8070,26 @@ const CLOUD = {
   saveTimer: null,
   applyingRemote: false,    // when true, our writes are skipped (we're reflecting cloud state)
   lastFloorImageHash: {},   // per-floor hash of the last image we synced, to skip resending unchanged images
+  // === LEADING-EDGE DEBOUNCE (v39) ===
+  // saveInFlight: a doCloudSave() Promise is currently awaiting Firestore.
+  // lastSaveStart: timestamp (ms) of when the most recent save was kicked off.
+  // Together these let scheduleCloudSave save IMMEDIATELY when the system is
+  // idle (instant feedback for site-walk taps spaced seconds apart) while
+  // still batching truly rapid edits (Apply-to-all, multiple date changes
+  // within ~1.5s) via a trailing-edge debounce.
+  saveInFlight: false,
+  lastSaveStart: 0,
+  // === ECHO GUARD (v40) ===
+  // Stores the updatedAt timestamp of every floor / cdtPlan doc we write.
+  // When onSnapshot fires back with one of those timestamps, we know it's
+  // OUR OWN write being echoed. If we naively replaced STATE.floors[idx]
+  // with the echo, any local edits the user made AFTER we kicked off the
+  // write (e.g. typing the next %, while the previous save was still
+  // in flight) would be wiped. With the guard, we skip the replacement
+  // for our own echoes and only apply genuinely remote ones. The set is
+  // bounded — entries are removed as their echoes arrive.
+  pendingFloorEchoes: new Set(),
+  pendingCdtEchoes: new Set(),
   // === SAFETY FLAGS (v33-dev) ===
   // Prevents the wipe-on-load race: don't allow any write until onSnapshot has
   // fired at least once for each collection this role subscribes to. Otherwise
@@ -8099,55 +8119,86 @@ function setCloudStatus(state, text){
 // most recent inputs are guaranteed to land in Firestore even if they
 // background the app right after.
 function flushCloudSave(){
-  if(!CLOUD.saveTimer) return;
-  clearTimeout(CLOUD.saveTimer);
-  CLOUD.saveTimer = null;
-  // Re-trigger save with no debounce by calling the inner save logic.
-  // Simplest portable way: call scheduleCloudSave then immediately fire
-  // its timer. We can't expose the inner closure directly, so we replicate
-  // the minimal work here.
+  if(CLOUD.saveTimer){
+    clearTimeout(CLOUD.saveTimer);
+    CLOUD.saveTimer = null;
+  }
   if(!window.FB || !window.FB.ready) return;
   if(CLOUD.applyingRemote) return;
   if(!ROLE.current) return;
   if(!CLOUD.floorsSyncedOnce) return;
   if(ROLE.canEditCDT() && !CLOUD.cdtPlanSyncedOnce) return;
+  if(CLOUD.saveInFlight) return;  // a save is already mid-flight; let it finish
+  doCloudSave();
+}
+
+// The actual save: writes meta + cdtPlan (if CDT) + floor doc to Firestore.
+// Refactored out of scheduleCloudSave so both the immediate (leading-edge)
+// and the debounced (trailing-edge) paths run identical logic.
+async function doCloudSave(){
+  if(CLOUD.saveInFlight) return;
+  CLOUD.saveInFlight = true;
+  CLOUD.lastSaveStart = Date.now();
   setCloudStatus('saving','Saving…');
-  (async () => {
-    try{
-      const { db, doc, setDoc } = window.FB;
-      const cf = currentFloor();
-      if(ROLE.canEditCDT()){
-        await setDoc(doc(db,'projects', CLOUD.PROJECT_ID,'meta','main'), buildMetaDoc());
-        if(cf){
-          const hasAreas = (cf.areas||[]).length > 0;
-          let hasAnyCdtData = false;
-          if(hasAreas){
-            outer: for(const a of cf.areas){
-              for(const k of Object.keys(a.tasks||{})){
-                const t = a.tasks[k];
-                if(t.planStartCDT || t.planEndCDT ||
-                   (Array.isArray(t.planStartCDTHistory) && t.planStartCDTHistory.length) ||
-                   (Array.isArray(t.planEndCDTHistory)   && t.planEndCDTHistory.length)){
-                  hasAnyCdtData = true; break outer;
-                }
+  try{
+    const { db, doc, setDoc } = window.FB;
+    const cf = currentFloor();
+
+    // CDT and Admin both can write /meta + /cdtPlan
+    if(ROLE.canEditCDT()){
+      await setDoc(doc(db,'projects', CLOUD.PROJECT_ID,'meta','main'), buildMetaDoc());
+      if(cf){
+        // === DEFENSIVE CHECK (v33-dev): skip /cdtPlan write if floor has areas
+        // but ALL Plan CDT fields are empty. Catches the case where STATE.floors
+        // got out of sync (e.g. cdtPlan onSnapshot disconnected mid-session) and
+        // we'd otherwise wipe cloud data. Legitimate "all empty" only happens on
+        // freshly-created floors with no areas yet — those pass the check via
+        // hasAreas=false and save normally.
+        const hasAreas = (cf.areas||[]).length > 0;
+        let hasAnyCdtData = false;
+        if(hasAreas){
+          outer: for(const a of cf.areas){
+            for(const k of Object.keys(a.tasks||{})){
+              const t = a.tasks[k];
+              if(t.planStartCDT || t.planEndCDT ||
+                 (Array.isArray(t.planStartCDTHistory) && t.planStartCDTHistory.length) ||
+                 (Array.isArray(t.planEndCDTHistory)   && t.planEndCDTHistory.length)){
+                hasAnyCdtData = true; break outer;
               }
             }
           }
-          if(!hasAreas || hasAnyCdtData){
-            await setDoc(doc(db,'projects', CLOUD.PROJECT_ID,'cdtPlan', cf.id), buildCdtPlanDoc(cf));
-          }
+        }
+        if(!hasAreas || hasAnyCdtData){
+          const cdtDoc = buildCdtPlanDoc(cf);
+          // Pre-register our own echo so the snapshot listener can ignore it
+          // (otherwise it would replace local Plan CDT with the version we
+          // just wrote, wiping any further edits the user made in the gap).
+          CLOUD.pendingCdtEchoes.add(cdtDoc.updatedAt);
+          await setDoc(doc(db,'projects', CLOUD.PROJECT_ID,'cdtPlan', cf.id), cdtDoc);
+        } else {
+          console.warn('[SAFETY] Skipped /cdtPlan save: all CDT data empty for floor', cf.id, cf.name);
         }
       }
-      if(cf){
-        await setDoc(doc(db,'projects', CLOUD.PROJECT_ID,'floors', cf.id), buildFloorDoc(cf));
-        CLOUD.lastFloorImageHash[cf.id] = strHash(cf.image||'');
-      }
-      setCloudStatus('synced','Synced ' + new Date().toLocaleTimeString().slice(0,5));
-    } catch(err){
-      console.error(err);
-      setCloudStatus('error','Save failed');
     }
-  })();
+
+    // CDT, NT, and Admin all can write to /floors (NT edits Plan NT + Actual)
+    if(cf){
+      const floorDoc = buildFloorDoc(cf);
+      // Pre-register our own echo for the same reason as cdtPlan above. This
+      // is what stops the colors-flicker-on-save bug: without it the echo
+      // fires applyRemoteFloor → STATE.floors[idx] = f → any edits the user
+      // made between setDoc start and echo arrival are wiped.
+      CLOUD.pendingFloorEchoes.add(floorDoc.updatedAt);
+      await setDoc(doc(db,'projects', CLOUD.PROJECT_ID,'floors', cf.id), floorDoc, {merge:true});
+      CLOUD.lastFloorImageHash[cf.id] = strHash(cf.image||'');
+    }
+    setCloudStatus('synced','Synced ' + new Date().toLocaleTimeString().slice(0,5));
+  } catch(err){
+    console.error(err);
+    setCloudStatus('error','Save failed');
+  } finally {
+    CLOUD.saveInFlight = false;
+  }
 }
 
 function strHash(s){
@@ -8192,10 +8243,9 @@ function stripCDTFromAreas(areas){
 
 // Build the public floor doc (no CDT plan dates inside).
 function buildFloorDoc(f){
-  return {
+  const doc = {
     id: f.id,
     name: f.name,
-    image: f.image || '',
     imgW: f.imgW || 0,
     imgH: f.imgH || 0,
     areas: stripCDTFromAreas(f.areas),
@@ -8204,6 +8254,24 @@ function buildFloorDoc(f){
     apartmentLabelOffsets: f.apartmentLabelOffsets || {},
     updatedAt: new Date().toISOString(),
   };
+  // === MOBILE DATA SAVER (v38) ===
+  // Floor plan images are base64-encoded JPEGs of 100-500KB each. Without this
+  // guard, every single edit (one tap on a quick % button) would re-upload the
+  // ENTIRE image, since setDoc rewrites the whole document. During a Quick
+  // Entry session of ~10 units × ~5 areas × a few taps each, that's 100+ saves
+  // and tens of megabytes of upload + the same amount echoed back via
+  // onSnapshot to every connected device. A real-world user burned through
+  // 500MB on a single floor's tiling check this way.
+  //
+  // Fix: only include the image field when it actually changed since the last
+  // save. All save sites use setDoc(..., {merge:true}) so omitting the field
+  // does NOT delete the cloud value — it just leaves the existing one intact.
+  const currentHash = strHash(f.image || '');
+  const lastHash = CLOUD.lastFloorImageHash[f.id];
+  if(currentHash !== lastHash){
+    doc.image = f.image || '';
+  }
+  return doc;
 }
 
 // Build the CDT-only plan doc for a floor: { areaId: { taskKey: {planStartCDT, planEndCDT, planStartCDTHistory, planEndCDTHistory} } }
@@ -8262,7 +8330,7 @@ async function cloudPushAll(){
     // upload meta + each floor (public) + each cdtPlan (private)
     await setDoc(doc(db,'projects', CLOUD.PROJECT_ID,'meta','main'), buildMetaDoc());
     for(const f of STATE.floors){
-      await setDoc(doc(db,'projects', CLOUD.PROJECT_ID,'floors',  f.id), buildFloorDoc(f));
+      await setDoc(doc(db,'projects', CLOUD.PROJECT_ID,'floors', f.id), buildFloorDoc(f), {merge:true});
       await setDoc(doc(db,'projects', CLOUD.PROJECT_ID,'cdtPlan', f.id), buildCdtPlanDoc(f));
       CLOUD.lastFloorImageHash[f.id] = strHash(f.image||'');
     }
@@ -8274,6 +8342,18 @@ async function cloudPushAll(){
   }
 }
 
+// === LEADING-EDGE DEBOUNCE (v39) ===
+// Old behaviour: every edit started a fresh 1.5s timer. Even a single tap
+// made the user wait 1.5s+network before seeing "Synced", which felt slow
+// and made the user worry whether the data had actually saved.
+//
+// New behaviour: if the system has been quiet (no save started in the last
+// 1.5s), fire the save IMMEDIATELY → instant feedback for normal site-walk
+// taps which are spaced 2-10s apart. If a tap arrives within the quiet
+// window (Apply-to-all, rapid date edits, etc.) we fall back to trailing-
+// edge debounce so multiple writes get batched into one. Data usage is the
+// same as the old trailing-only debounce; latency drops to near-zero for
+// the common case.
 function scheduleCloudSave(){
   if(!window.FB || !window.FB.ready) return;
   if(CLOUD.applyingRemote) return;
@@ -8293,56 +8373,29 @@ function scheduleCloudSave(){
     return;
   }
 
-  if(CLOUD.saveTimer) clearTimeout(CLOUD.saveTimer);
+  const QUIET_MS = 1500;
+  const now = Date.now();
+  const sinceLastStart = now - (CLOUD.lastSaveStart || 0);
+
+  // System idle and no save mid-flight → save immediately (leading edge).
+  if(!CLOUD.saveInFlight && sinceLastStart >= QUIET_MS){
+    if(CLOUD.saveTimer){ clearTimeout(CLOUD.saveTimer); CLOUD.saveTimer = null; }
+    doCloudSave();
+    return;
+  }
+
+  // System busy (save in flight) or within the batching window → trailing
+  // debounce. Show "Saving…" so the user knows the change is queued.
   setCloudStatus('saving','Saving…');
-  CLOUD.saveTimer = setTimeout(async () => {
-    try{
-      const { db, doc, setDoc } = window.FB;
-      const cf = currentFloor();
-
-      // CDT and Admin both can write /meta + /cdtPlan
-      if(ROLE.canEditCDT()){
-        await setDoc(doc(db,'projects', CLOUD.PROJECT_ID,'meta','main'), buildMetaDoc());
-        if(cf){
-          // === DEFENSIVE CHECK (v33-dev): skip /cdtPlan write if floor has areas
-          // but ALL Plan CDT fields are empty. Catches the case where STATE.floors
-          // got out of sync (e.g. cdtPlan onSnapshot disconnected mid-session) and
-          // we'd otherwise wipe cloud data. Legitimate "all empty" only happens on
-          // freshly-created floors with no areas yet — those pass the check via
-          // hasAreas=false and save normally.
-          const hasAreas = (cf.areas||[]).length > 0;
-          let hasAnyCdtData = false;
-          if(hasAreas){
-            outer: for(const a of cf.areas){
-              for(const k of Object.keys(a.tasks||{})){
-                const t = a.tasks[k];
-                if(t.planStartCDT || t.planEndCDT ||
-                   (Array.isArray(t.planStartCDTHistory) && t.planStartCDTHistory.length) ||
-                   (Array.isArray(t.planEndCDTHistory)   && t.planEndCDTHistory.length)){
-                  hasAnyCdtData = true; break outer;
-                }
-              }
-            }
-          }
-          if(!hasAreas || hasAnyCdtData){
-            await setDoc(doc(db,'projects', CLOUD.PROJECT_ID,'cdtPlan', cf.id), buildCdtPlanDoc(cf));
-          } else {
-            console.warn('[SAFETY] Skipped /cdtPlan save: all CDT data empty for floor', cf.id, cf.name);
-          }
-        }
-      }
-
-      // CDT, NT, and Admin all can write to /floors (NT edits Plan NT + Actual)
-      if(cf){
-        await setDoc(doc(db,'projects', CLOUD.PROJECT_ID,'floors', cf.id), buildFloorDoc(cf));
-        CLOUD.lastFloorImageHash[cf.id] = strHash(cf.image||'');
-      }
-      setCloudStatus('synced','Synced ' + new Date().toLocaleTimeString().slice(0,5));
-    } catch(err){
-      console.error(err);
-      setCloudStatus('error','Save failed');
-    }
-  }, 1500);
+  if(CLOUD.saveTimer) clearTimeout(CLOUD.saveTimer);
+  const remaining = Math.max(150, QUIET_MS - sinceLastStart);
+  CLOUD.saveTimer = setTimeout(() => {
+    CLOUD.saveTimer = null;
+    // If a save is still in flight when the timer fires, doCloudSave will
+    // bail out via its own guard and the trailing edits get picked up by
+    // the next scheduleCloudSave invocation.
+    doCloudSave();
+  }, remaining);
 }
 
 async function cloudLoadAndSubscribe(){
@@ -8412,8 +8465,14 @@ async function cloudLoadAndSubscribe(){
         onSnapshot(collection(db,'projects', CLOUD.PROJECT_ID,'cdtPlan'), snap => {
           snap.docChanges().forEach(ch => {
             if(ch.type === 'modified' || ch.type === 'added'){
+              const data = ch.doc.data();
+              // === ECHO GUARD (v40) === skip our own writes — see applyRemoteFloor.
+              if(data && data.updatedAt && CLOUD.pendingCdtEchoes.has(data.updatedAt)){
+                CLOUD.pendingCdtEchoes.delete(data.updatedAt);
+                return;
+              }
               const f = STATE.floors.find(x => x.id === ch.doc.id);
-              if(f){ mergeCdtPlanIntoFloor(f, ch.doc.data()); render(); }
+              if(f){ mergeCdtPlanIntoFloor(f, data); render(); }
             }
           });
           // Mark cdtPlan as fully synced after first snapshot — unblocks save.
@@ -8437,7 +8496,7 @@ async function cloudLoadAndSubscribe(){
         try{
           for(const f of STATE.floors){
             await setDoc(doc(db,'projects', CLOUD.PROJECT_ID,'cdtPlan', f.id), buildCdtPlanDoc(f));
-            await setDoc(doc(db,'projects', CLOUD.PROJECT_ID,'floors',  f.id), buildFloorDoc(f));
+            await setDoc(doc(db,'projects', CLOUD.PROJECT_ID,'floors', f.id), buildFloorDoc(f), {merge:true});
           }
           setCloudStatus('synced','Migration done');
         } catch(e){
@@ -8540,6 +8599,18 @@ function applyRemoteMeta(meta){
 function applyRemoteFloor(f){
   CLOUD.applyingRemote = true;
   try{
+    // === ECHO GUARD (v40) ===
+    // If this snapshot's updatedAt matches one we wrote ourselves, this is
+    // OUR own write being echoed back. Skip the STATE replacement: doing it
+    // would clobber any local edits the user made between when our setDoc
+    // started and when this echo arrived. We still update the image hash
+    // (it's a faithful record of what's now in cloud for that floor).
+    if(f && f.updatedAt && CLOUD.pendingFloorEchoes.has(f.updatedAt)){
+      CLOUD.pendingFloorEchoes.delete(f.updatedAt);
+      CLOUD.lastFloorImageHash[f.id] = strHash(f.image||'');
+      return;
+    }
+
     (f.areas||[]).forEach(a => ensureAreaTasks(a));
     const idx = STATE.floors.findIndex(x => x.id === f.id);
     // Preserve CDT-only plan dates that we already have locally (the public /floors
