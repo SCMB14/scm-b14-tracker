@@ -1335,13 +1335,28 @@
     main{flex-direction:column}
     .canvas-wrap{flex:1;min-height:0}
 
-    /* Detail panel = near-full-screen overlay on mobile so editing is easy */
+    /* Detail panel = bottom sheet on mobile (anchored to bottom, NOT a full
+       overlay). Canvas stays visible above so the user can see which area
+       they're editing without closing the sheet. Auto-height capped by max,
+       slides up from bottom. */
     .detail-panel{
+      position:fixed;
+      top:auto;
+      left:0;right:0;bottom:0;
       width:100%;
       max-width:100vw;
+      height:auto;
+      max-height:60vh;
       border-left:none;
       border-top:2px solid var(--accent);
+      border-radius:14px 14px 0 0;
+      box-shadow:0 -8px 24px rgba(0,0,0,.45);
       z-index:40;
+    }
+    .detail-panel.show{animation:panelInBottom .22s ease-out}
+    @keyframes panelInBottom{
+      from{transform:translateY(40px);opacity:0}
+      to{transform:translateY(0);opacity:1}
     }
     .detail-field input{
       padding:12px;
@@ -1351,11 +1366,40 @@
     .detail-tab{padding:8px 4px;font-size:11px;min-height:44px}
     .detail-close{width:36px;height:36px;font-size:22px}
 
-    /* Simplified mobile detail panel: stack ALL trades as compact cards,
-       hide tabs. Only what a site engineer needs to enter on a phone:
-       actual start/end + %actual. Plan dates shown read-only for reference. */
+    /* Simplified mobile detail panel: by default we render ONLY the active
+       trade as a single card (the one the user picked via the sidebar task
+       selector). In "All" view we show a small horizontal pill row so the
+       user can quickly switch trades without leaving the sheet. */
     .detail-panel.mobile-simple .detail-tabs{display:none}
     .detail-panel.mobile-simple .detail-sub{display:none}
+    .m-trade-picker{
+      display:flex;
+      gap:6px;
+      overflow-x:auto;
+      margin:-2px -2px 10px;
+      padding:2px 2px 6px;
+      scrollbar-width:none;
+    }
+    .m-trade-picker::-webkit-scrollbar{display:none}
+    .m-pick{
+      display:flex;align-items:center;gap:5px;
+      padding:6px 10px;
+      border:1px solid var(--border);
+      border-radius:14px;
+      font-size:11px;
+      color:var(--muted);
+      background:var(--panel);
+      white-space:nowrap;
+      flex-shrink:0;
+      cursor:pointer;
+    }
+    .m-pick .dot{width:8px;height:8px;border-radius:2px;flex-shrink:0}
+    .m-pick.active{
+      color:var(--text);
+      border-color:var(--c, var(--accent));
+      background:rgba(255,255,255,.06);
+      font-weight:600;
+    }
     .m-trade-card{
       border:1px solid var(--border);
       border-radius:8px;
@@ -3651,9 +3695,22 @@ function makeFloor(name, image){
 function renderFloorSelect(){
   const sel = $('floorSelect');
   if(!sel) return;
+  // Build a signature representing what the dropdown SHOULD look like.
+  // If it matches what's already rendered, skip the innerHTML rebuild and
+  // just update the selected value. This avoids the native mobile dropdown
+  // flickering when the underlying <select> is rebuilt mid-interaction
+  // (render() runs after every image load, area edit, etc.).
+  const sig = STATE.floors.map(f => `${f.id}|${f.name}|${f.areas.length}`).join('§');
+  if(sel.dataset.sig === sig){
+    if(sel.value !== STATE.currentFloorId && STATE.currentFloorId){
+      sel.value = STATE.currentFloorId;
+    }
+    return;
+  }
   sel.innerHTML = STATE.floors.map(f =>
     `<option value="${f.id}" ${f.id===STATE.currentFloorId?'selected':''}>${f.name} (${f.areas.length} areas)</option>`
   ).join('');
+  sel.dataset.sig = sig;
 }
 
 function switchToFloor(floorId){
@@ -6082,10 +6139,14 @@ function closeDetailPanel(){
   $('detailPanel').classList.remove('show');
 }
 // =========================================================================
-// Mobile simplified detail panel: every trade rendered as a compact card,
-// stacked vertically. Only fields a site engineer needs on a phone walk:
-// actual start, actual end, and %actual. Plan dates shown as small text
-// for reference but not editable here (use desktop for plan edits / history).
+// Mobile simplified detail panel: bottom-sheet style, focused on ONE trade
+// at a time (the one the user picked in the sidebar task selector).
+// - Specific task view (e.g. Tiling): renders only that trade's card.
+// - "All" view: shows a small horizontal pill picker so the user can switch
+//   trades inside the sheet without dismissing it.
+// Plan dates are shown read-only for reference; user enters actual start,
+// actual end, and %actual. No tabs, no history, no buffer math — those are
+// hard to use on a small screen and rarely needed while walking the site.
 // =========================================================================
 function renderMobileDetailPanel(area){
   const fmtDmy = (s) => {
@@ -6097,44 +6158,86 @@ function renderMobileDetailPanel(area){
     <div><b>${label}:</b> ${fmtDmy(start)} → ${fmtDmy(end)}</div>
   `;
 
-  const body = $('detailBody');
-  body.innerHTML = TASKS.map(t => {
-    const td = area.tasks[t.key];
-    const st = calcTaskStatus(td);
-    const actPct = Math.round(Number(td.percentActual)||0);
-    const planLines = ROLE.canEditCDT()
-      ? planRow('Plan CDT', td.planStartCDT, td.planEndCDT) + planRow('Plan NT', td.planStartNT, td.planEndNT)
-      : planRow('Plan NT', taskPlanStartNT(td), taskPlanEndNT(td));
-    return `
-      <div class="m-trade-card ${td.na ? 'is-na' : ''}" data-trade-key="${t.key}">
-        <div class="m-trade-head">
-          <div class="dot" style="background:${t.color}"></div>
-          <div class="name">${t.name}</div>
-          <div class="pill badge-${st.status}">${st.label.split(' ')[0]}</div>
+  // Pick which single trade to focus on.
+  // - If a specific task is the current sidebar selection → use that.
+  // - If "All" view → use STATE.detailTab (last touched), fallback first task.
+  const isAllView = STATE.currentTask === '__all__';
+  let focusKey;
+  if(!isAllView && TASK_BY_KEY[STATE.currentTask]){
+    focusKey = STATE.currentTask;
+  } else if(STATE.detailTab && TASK_BY_KEY[STATE.detailTab]){
+    focusKey = STATE.detailTab;
+  } else {
+    focusKey = TASKS[0].key;
+  }
+  STATE.detailTab = focusKey;  // keep in sync so re-renders pick up the same trade
+
+  const t  = TASK_BY_KEY[focusKey];
+  const td = area.tasks[focusKey];
+  const st = calcTaskStatus(td);
+  const actPct = Math.round(Number(td.percentActual)||0);
+  const planLines = ROLE.canEditCDT()
+    ? planRow('Plan CDT', td.planStartCDT, td.planEndCDT) + planRow('Plan NT', td.planStartNT, td.planEndNT)
+    : planRow('Plan NT', taskPlanStartNT(td), taskPlanEndNT(td));
+
+  // Title shows "Area · Trade short" so it's clear what's being edited.
+  $('detailTitle').textContent = `${area.name} · ${t.short}`;
+
+  // Trade picker — only rendered in "All" view (in a specific-task view the
+  // user already picked their trade in the sidebar, so a picker would be
+  // redundant clutter).
+  let pickerHtml = '';
+  if(isAllView){
+    pickerHtml = `<div class="m-trade-picker">` + TASKS.map(tt => `
+      <div class="m-pick ${tt.key === focusKey ? 'active' : ''}" data-mpick="${tt.key}" style="--c:${tt.color}">
+        <div class="dot" style="background:${tt.color}"></div>
+        <span>${tt.short}</span>
+      </div>
+    `).join('') + `</div>`;
+  }
+
+  const cardHtml = `
+    <div class="m-trade-card ${td.na ? 'is-na' : ''}" data-trade-key="${focusKey}">
+      <div class="m-trade-head">
+        <div class="dot" style="background:${t.color}"></div>
+        <div class="name">${t.name}</div>
+        <div class="pill badge-${st.status}">${st.label.split(' ')[0]}</div>
+      </div>
+      <div class="m-trade-plan">${planLines}</div>
+      <div class="m-trade-grid">
+        <div class="detail-field">
+          <label>Actual Start</label>
+          <input type="date" data-mfield="actualStart" data-trade-key="${focusKey}" value="${td.actualStart||''}">
         </div>
-        <div class="m-trade-plan">${planLines}</div>
-        <div class="m-trade-grid">
-          <div class="detail-field">
-            <label>Actual Start</label>
-            <input type="date" data-mfield="actualStart" data-trade-key="${t.key}" value="${td.actualStart||''}">
-          </div>
-          <div class="detail-field">
-            <label>Actual End</label>
-            <input type="date" data-mfield="actualEnd" data-trade-key="${t.key}" value="${td.actualEnd||''}">
-          </div>
-        </div>
-        <div class="m-trade-pct">
-          <label>% Actual</label>
-          <input type="number" min="0" max="100" step="1" data-mfield="percentActual" data-trade-key="${t.key}" value="${actPct}">
-          <span class="pct-suffix">%</span>
-        </div>
-        <div class="m-na-toggle">
-          <span>Not applicable (N/A)</span>
-          <div class="toggle ${td.na ? 'on' : ''}" data-mna="${t.key}"></div>
+        <div class="detail-field">
+          <label>Actual End</label>
+          <input type="date" data-mfield="actualEnd" data-trade-key="${focusKey}" value="${td.actualEnd||''}">
         </div>
       </div>
-    `;
-  }).join('');
+      <div class="m-trade-pct">
+        <label>% Actual</label>
+        <input type="number" min="0" max="100" step="1" data-mfield="percentActual" data-trade-key="${focusKey}" value="${actPct}">
+        <span class="pct-suffix">%</span>
+      </div>
+      <div class="m-na-toggle">
+        <span>Not applicable (N/A)</span>
+        <div class="toggle ${td.na ? 'on' : ''}" data-mna="${focusKey}"></div>
+      </div>
+    </div>
+  `;
+
+  const body = $('detailBody');
+  body.innerHTML = pickerHtml + cardHtml;
+
+  // Wire picker pills (only present in All view)
+  if(isAllView){
+    body.querySelectorAll('[data-mpick]').forEach(p => {
+      p.addEventListener('click', () => {
+        STATE.detailTab = p.dataset.mpick;
+        renderMobileDetailPanel(area);
+      });
+    });
+  }
 
   wireMobileDetailInputs(area);
 }
