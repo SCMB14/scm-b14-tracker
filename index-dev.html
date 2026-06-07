@@ -1764,7 +1764,7 @@
   <button class="quick-entry-btn" id="quickEntryBtn" title="Quick Entry — fast per-unit progress input" aria-label="Quick Entry">⚡</button>
   <div class="logo">SCM<span>·B14</span> PROGRESS</div>
   <div class="subtitle">Multi-Task<br>Construction Tracker</div>
-  <div style="font-size:11px;color:#000;background:var(--green);padding:3px 10px;border-radius:12px;font-weight:700;font-family:var(--font-mono)">v40</div>
+  <div style="font-size:11px;color:#000;background:var(--green);padding:3px 10px;border-radius:12px;font-weight:700;font-family:var(--font-mono)">v41</div>
   <div class="toolbar">
     <button class="btn" id="loadImageBtn" title="Load floor plan (image or PDF) for the current floor">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg>
@@ -8090,6 +8090,16 @@ const CLOUD = {
   // bounded — entries are removed as their echoes arrive.
   pendingFloorEchoes: new Set(),
   pendingCdtEchoes: new Set(),
+  // === DIRTY-CHECK SIGNATURES (v41) ===
+  // Stable fingerprint of the last data we synced for each doc, so we can
+  // skip any save where the data is byte-for-byte identical to cloud. This
+  // is what stops navigation (floor/trade switch) and UI toggles from
+  // costing the user mobile data — those run render() which used to fire
+  // scheduleCloudSave unconditionally. With sigs, we recompute and compare:
+  // unchanged → return immediately, status stays "Synced", zero bytes sent.
+  lastFloorSig: {},  // {floorId: hash}
+  lastCdtSig:   {},  // {floorId: hash}
+  lastMetaSig:  '',
   // === SAFETY FLAGS (v33-dev) ===
   // Prevents the wipe-on-load race: don't allow any write until onSnapshot has
   // fired at least once for each collection this role subscribes to. Otherwise
@@ -8139,58 +8149,71 @@ async function doCloudSave(){
   if(CLOUD.saveInFlight) return;
   CLOUD.saveInFlight = true;
   CLOUD.lastSaveStart = Date.now();
-  setCloudStatus('saving','Saving…');
   try{
     const { db, doc, setDoc } = window.FB;
     const cf = currentFloor();
 
-    // CDT and Admin both can write /meta + /cdtPlan
-    if(ROLE.canEditCDT()){
+    // Compute current sigs UPFRONT so each write site checks against the
+    // same snapshot of state.
+    const mSig = ROLE.canEditCDT() ? metaDataSig() : null;
+    const cSig = (ROLE.canEditCDT() && cf) ? cdtDataSig(cf) : null;
+    const fSig = cf ? floorDataSig(cf) : null;
+
+    const metaDirty  = (mSig !== null) && (mSig !== CLOUD.lastMetaSig);
+    const cdtDirty   = (cSig !== null) && (cSig !== CLOUD.lastCdtSig[cf.id]);
+    const floorDirty = (fSig !== null) && (fSig !== CLOUD.lastFloorSig[cf.id]);
+
+    if(!metaDirty && !cdtDirty && !floorDirty){
+      // Nothing actually changed. Don't show "Saving"; status stays as is.
+      // (scheduleCloudSave usually catches this before we get here, but this
+      // is a defensive last line: e.g. a trailing-edge timer firing after
+      // the user undid their change.)
+      CLOUD.saveInFlight = false;
+      return;
+    }
+    setCloudStatus('saving','Saving…');
+
+    // /meta — only when its data actually changed
+    if(metaDirty){
       await setDoc(doc(db,'projects', CLOUD.PROJECT_ID,'meta','main'), buildMetaDoc());
-      if(cf){
-        // === DEFENSIVE CHECK (v33-dev): skip /cdtPlan write if floor has areas
-        // but ALL Plan CDT fields are empty. Catches the case where STATE.floors
-        // got out of sync (e.g. cdtPlan onSnapshot disconnected mid-session) and
-        // we'd otherwise wipe cloud data. Legitimate "all empty" only happens on
-        // freshly-created floors with no areas yet — those pass the check via
-        // hasAreas=false and save normally.
-        const hasAreas = (cf.areas||[]).length > 0;
-        let hasAnyCdtData = false;
-        if(hasAreas){
-          outer: for(const a of cf.areas){
-            for(const k of Object.keys(a.tasks||{})){
-              const t = a.tasks[k];
-              if(t.planStartCDT || t.planEndCDT ||
-                 (Array.isArray(t.planStartCDTHistory) && t.planStartCDTHistory.length) ||
-                 (Array.isArray(t.planEndCDTHistory)   && t.planEndCDTHistory.length)){
-                hasAnyCdtData = true; break outer;
-              }
+      CLOUD.lastMetaSig = mSig;
+    }
+    // /cdtPlan/<floor>
+    if(cdtDirty){
+      // === DEFENSIVE CHECK (v33-dev): skip /cdtPlan write if floor has areas
+      // but ALL Plan CDT fields are empty. Catches the case where STATE.floors
+      // got out of sync (e.g. cdtPlan onSnapshot disconnected mid-session) and
+      // we'd otherwise wipe cloud data.
+      const hasAreas = (cf.areas||[]).length > 0;
+      let hasAnyCdtData = false;
+      if(hasAreas){
+        outer: for(const a of cf.areas){
+          for(const k of Object.keys(a.tasks||{})){
+            const t = a.tasks[k];
+            if(t.planStartCDT || t.planEndCDT ||
+               (Array.isArray(t.planStartCDTHistory) && t.planStartCDTHistory.length) ||
+               (Array.isArray(t.planEndCDTHistory)   && t.planEndCDTHistory.length)){
+              hasAnyCdtData = true; break outer;
             }
           }
         }
-        if(!hasAreas || hasAnyCdtData){
-          const cdtDoc = buildCdtPlanDoc(cf);
-          // Pre-register our own echo so the snapshot listener can ignore it
-          // (otherwise it would replace local Plan CDT with the version we
-          // just wrote, wiping any further edits the user made in the gap).
-          CLOUD.pendingCdtEchoes.add(cdtDoc.updatedAt);
-          await setDoc(doc(db,'projects', CLOUD.PROJECT_ID,'cdtPlan', cf.id), cdtDoc);
-        } else {
-          console.warn('[SAFETY] Skipped /cdtPlan save: all CDT data empty for floor', cf.id, cf.name);
-        }
+      }
+      if(!hasAreas || hasAnyCdtData){
+        const cdtDoc = buildCdtPlanDoc(cf);
+        CLOUD.pendingCdtEchoes.add(cdtDoc.updatedAt);
+        await setDoc(doc(db,'projects', CLOUD.PROJECT_ID,'cdtPlan', cf.id), cdtDoc);
+        CLOUD.lastCdtSig[cf.id] = cSig;
+      } else {
+        console.warn('[SAFETY] Skipped /cdtPlan save: all CDT data empty for floor', cf.id, cf.name);
       }
     }
-
-    // CDT, NT, and Admin all can write to /floors (NT edits Plan NT + Actual)
-    if(cf){
+    // /floors/<floor>
+    if(floorDirty){
       const floorDoc = buildFloorDoc(cf);
-      // Pre-register our own echo for the same reason as cdtPlan above. This
-      // is what stops the colors-flicker-on-save bug: without it the echo
-      // fires applyRemoteFloor → STATE.floors[idx] = f → any edits the user
-      // made between setDoc start and echo arrival are wiped.
       CLOUD.pendingFloorEchoes.add(floorDoc.updatedAt);
       await setDoc(doc(db,'projects', CLOUD.PROJECT_ID,'floors', cf.id), floorDoc, {merge:true});
       CLOUD.lastFloorImageHash[cf.id] = strHash(cf.image||'');
+      CLOUD.lastFloorSig[cf.id] = fSig;
     }
     setCloudStatus('synced','Synced ' + new Date().toLocaleTimeString().slice(0,5));
   } catch(err){
@@ -8206,6 +8229,70 @@ function strHash(s){
   let h = 0;
   for(let i=0; i<s.length; i++){ h = ((h<<5) - h) + s.charCodeAt(i); h |= 0; }
   return h;
+}
+
+// =========================================================================
+// DIRTY-CHECK SIGNATURES (v41)
+// Stable JSON-hash fingerprints of each cloud doc's DATA. Used to skip any
+// save where nothing changed. EXPLICITLY excludes pure UI state (current
+// floor, current trade, view toggles, today) so navigation and toggle flips
+// never burn mobile data.
+// =========================================================================
+function floorDataSig(f){
+  if(!f) return '';
+  // Includes the image hash so re-uploading a floor plan still triggers a
+  // save (other fields might be unchanged). stripCDTFromAreas matches the
+  // shape that actually goes into /floors collection, so the sig reflects
+  // the cloud's view of this floor.
+  return strHash(JSON.stringify({
+    n: f.name||'',
+    w: f.imgW||0,
+    h: f.imgH||0,
+    g: strHash(f.image||''),
+    o: f.apartmentLabelOffsets||{},
+    a: stripCDTFromAreas(f.areas||[]),
+  }));
+}
+
+function metaDataSig(){
+  // EXCLUDES: currentTask, currentFloorId, toggles, today, detailTab.
+  // INCLUDES: project-wide settings (cutoffDate, labelScale, snapshots,
+  // floor order, task definitions). Changes to those *do* warrant a save.
+  return strHash(JSON.stringify({
+    cd: STATE.cutoffDate||'',
+    sn: STATE.snapshots||[],
+    ls: STATE.labelScale||1,
+    fo: STATE.floors.map(f=>f.id),
+    tk: TASKS.map(t => ({k:t.key, n:t.name, s:t.short, c:t.color, x:!!t.custom})),
+  }));
+}
+
+function cdtDataSig(f){
+  if(!f) return '';
+  return strHash(JSON.stringify(
+    (f.areas||[]).map(a => ({
+      i: a.id,
+      t: Object.fromEntries(Object.entries(a.tasks||{}).map(([k,t]) => [k, {
+        s: t.planStartCDT||'',
+        e: t.planEndCDT||'',
+        sh: t.planStartCDTHistory||[],
+        eh: t.planEndCDTHistory||[],
+      }]))
+    }))
+  ));
+}
+
+// Returns true if at least one of the docs we'd write differs from what we
+// last sent to cloud. scheduleCloudSave bails out early when this is false,
+// so view-switching / toggling do not cost any bytes.
+function hasPendingDataChange(){
+  const cf = currentFloor();
+  if(cf && floorDataSig(cf) !== CLOUD.lastFloorSig[cf.id]) return true;
+  if(ROLE.canEditCDT()){
+    if(metaDataSig() !== CLOUD.lastMetaSig) return true;
+    if(cf && cdtDataSig(cf) !== CLOUD.lastCdtSig[cf.id]) return true;
+  }
+  return false;
 }
 
 function buildMetaDoc(){
@@ -8373,6 +8460,16 @@ function scheduleCloudSave(){
     return;
   }
 
+  // === DIRTY CHECK (v41) ===
+  // Bail out immediately when nothing actually changed. render() is called
+  // for many non-data things — switching floor, switching trade, toggling
+  // view options, opening pickers — and the hook below makes every one of
+  // those call scheduleCloudSave. Without this guard each navigation flashed
+  // "Saving…" and (worse) actually shipped the floor doc over the network.
+  // This is the main fix for the "saving on every view switch burns data"
+  // complaint.
+  if(!hasPendingDataChange()) return;
+
   const QUIET_MS = 1500;
   const now = Date.now();
   const sinceLastStart = now - (CLOUD.lastSaveStart || 0);
@@ -8472,7 +8569,11 @@ async function cloudLoadAndSubscribe(){
                 return;
               }
               const f = STATE.floors.find(x => x.id === ch.doc.id);
-              if(f){ mergeCdtPlanIntoFloor(f, data); render(); }
+              if(f){
+                mergeCdtPlanIntoFloor(f, data);
+                CLOUD.lastCdtSig[f.id] = cdtDataSig(f);
+                render();
+              }
             }
           });
           // Mark cdtPlan as fully synced after first snapshot — unblocks save.
@@ -8565,6 +8666,15 @@ function applyCloudState(meta, floorsSnap, cdtPlanMap){
     renderFloorSelect();
     const cf = currentFloor();
     if(cf) floorImg.src = cf.image || DEFAULT_IMG;
+    // === DIRTY-CHECK INIT (v41) ===
+    // After loading cloud state, fingerprint everything so the very next
+    // render() (which will fire from finally → caller code paths) doesn't
+    // think we have local changes and trigger a redundant write.
+    CLOUD.lastMetaSig = metaDataSig();
+    STATE.floors.forEach(f => {
+      CLOUD.lastFloorSig[f.id] = floorDataSig(f);
+      CLOUD.lastCdtSig[f.id]   = cdtDataSig(f);
+    });
   } finally {
     CLOUD.applyingRemote = false;
   }
@@ -8590,6 +8700,8 @@ function applyRemoteMeta(meta){
     document.querySelectorAll('[data-toggle]').forEach(t => {
       t.classList.toggle('on', STATE.toggles[t.dataset.toggle]);
     });
+    // Now that we've absorbed the remote, our fingerprint matches it.
+    CLOUD.lastMetaSig = metaDataSig();
     render();
   } finally {
     CLOUD.applyingRemote = false;
@@ -8634,6 +8746,9 @@ function applyRemoteFloor(f){
     if(idx === -1) STATE.floors.push(f);
     else STATE.floors[idx] = f;
     CLOUD.lastFloorImageHash[f.id] = strHash(f.image||'');
+    // Fingerprint matches cloud now — next scheduleCloudSave call won't fire
+    // unless the user actually edits something.
+    CLOUD.lastFloorSig[f.id] = floorDataSig(f);
     if(STATE.currentFloorId === f.id){
       if(floorImg.src !== (f.image||DEFAULT_IMG)) floorImg.src = f.image || DEFAULT_IMG;
     }
