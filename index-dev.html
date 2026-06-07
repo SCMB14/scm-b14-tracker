@@ -1335,6 +1335,13 @@
     main{flex-direction:column}
     .canvas-wrap{flex:1;min-height:0}
 
+    /* Hover-tooltip with all-trades summary is useless and harmful on touch:
+       Android fires a synthetic mouseenter on tap, so this big centered popup
+       appears whenever the user selects an area, blocking the canvas and
+       overlapping the new bottom-sheet detail panel. All the info is already
+       available in the bottom sheet, so we hide the tooltip entirely on phones. */
+    .tooltip{display:none !important}
+
     /* Detail panel = bottom sheet on mobile (anchored to bottom, NOT a full
        overlay). Canvas stays visible above so the user can see which area
        they're editing without closing the sheet. Auto-height capped by max,
@@ -1500,7 +1507,7 @@
   <button class="hamburger-btn" id="hamburgerBtn" title="Open/close menu" aria-label="Toggle sidebar">☰</button>
   <div class="logo">SCM<span>·B14</span> PROGRESS</div>
   <div class="subtitle">Multi-Task<br>Construction Tracker</div>
-  <div style="font-size:11px;color:#000;background:var(--green);padding:3px 10px;border-radius:12px;font-weight:700;font-family:var(--font-mono)">v33</div>
+  <div style="font-size:11px;color:#000;background:var(--green);padding:3px 10px;border-radius:12px;font-weight:700;font-family:var(--font-mono)">v34</div>
   <div class="toolbar">
     <button class="btn" id="loadImageBtn" title="Load floor plan (image or PDF) for the current floor">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg>
@@ -5789,6 +5796,10 @@ function updateTaskCounts(){
    TOOLTIP
 ============================================================= */
 function showTooltip(e, area){
+  // Mobile (≤768px) doesn't really have hover; Android fires a synthetic
+  // mouseenter on tap which would otherwise pop this big all-trades summary
+  // over the canvas. The bottom-sheet detail panel already shows what's needed.
+  if(window.innerWidth <= 768) return;
   ensureAreaTasks(area);
   const aggregate = calcAreaAggregateStatus(area);
 
