@@ -1351,6 +1351,75 @@
     .detail-tab{padding:8px 4px;font-size:11px;min-height:44px}
     .detail-close{width:36px;height:36px;font-size:22px}
 
+    /* Simplified mobile detail panel: stack ALL trades as compact cards,
+       hide tabs. Only what a site engineer needs to enter on a phone:
+       actual start/end + %actual. Plan dates shown read-only for reference. */
+    .detail-panel.mobile-simple .detail-tabs{display:none}
+    .detail-panel.mobile-simple .detail-sub{display:none}
+    .m-trade-card{
+      border:1px solid var(--border);
+      border-radius:8px;
+      padding:10px 12px;
+      margin-bottom:10px;
+      background:var(--panel-2);
+    }
+    .m-trade-head{
+      display:flex;align-items:center;gap:8px;
+      margin-bottom:8px;
+      font-weight:700;font-size:14px;
+    }
+    .m-trade-head .dot{
+      width:14px;height:14px;border-radius:3px;flex-shrink:0;
+    }
+    .m-trade-head .name{flex:1}
+    .m-trade-head .pill{
+      font-size:10px;padding:3px 7px;border-radius:10px;font-weight:600;
+    }
+    .m-trade-plan{
+      font-size:11px;color:var(--muted);
+      margin-bottom:8px;
+      display:flex;flex-direction:column;gap:2px;
+    }
+    .m-trade-plan b{color:var(--text);font-weight:600}
+    .m-trade-grid{
+      display:grid;
+      grid-template-columns:1fr 1fr;
+      gap:8px;
+      margin-bottom:8px;
+    }
+    .m-trade-grid .detail-field{margin:0}
+    .m-trade-grid label{
+      font-size:10px;color:var(--muted);
+      margin-bottom:2px;display:block;
+    }
+    .m-trade-pct{
+      display:flex;align-items:center;gap:8px;
+    }
+    .m-trade-pct label{
+      font-size:11px;color:var(--muted);flex-shrink:0;
+    }
+    .m-trade-pct input{
+      flex:1;
+      padding:10px;
+      font-size:18px;
+      font-weight:700;
+      text-align:center;
+      min-height:44px;
+    }
+    .m-trade-pct .pct-suffix{
+      font-weight:700;font-size:16px;
+    }
+    .m-na-toggle{
+      display:flex;align-items:center;justify-content:space-between;
+      font-size:11px;color:var(--muted);
+      margin-top:6px;
+    }
+    .m-trade-card.is-na .m-trade-grid,
+    .m-trade-card.is-na .m-trade-pct,
+    .m-trade-card.is-na .m-trade-plan{
+      opacity:.35;pointer-events:none;
+    }
+
     /* Modals tighter on phone */
     .modal{width:95vw;max-width:95vw;border-radius:8px}
     .modal-body{padding:12px}
@@ -1380,11 +1449,11 @@
 <body>
 
 <div id="devBanner" style="position:sticky;top:0;z-index:99999;background:repeating-linear-gradient(45deg,#ff6b00,#ff6b00 12px,#000 12px,#000 24px);color:#fff;font-family:'Courier New',monospace;font-weight:900;font-size:13px;text-align:center;padding:6px 12px;letter-spacing:2px;text-shadow:1px 1px 2px #000;border-bottom:3px solid #000">
-  ⚠ DEV ENVIRONMENT — DỮ LIỆU RIÊNG, KHÔNG PHẢI BẢN CHÍNH THỨC ⚠ &nbsp;&nbsp;|&nbsp;&nbsp; collection: scm-b14-dev
+  ⚠ DEV ENVIRONMENT — TEST DATA — NOT THE OFFICIAL VERSION ⚠ &nbsp;&nbsp;|&nbsp;&nbsp; collection: scm-b14-dev
 </div>
 
 <header>
-  <button class="hamburger-btn" id="hamburgerBtn" title="Mở/đóng menu" aria-label="Toggle sidebar">☰</button>
+  <button class="hamburger-btn" id="hamburgerBtn" title="Open/close menu" aria-label="Toggle sidebar">☰</button>
   <div class="logo">SCM<span>·B14</span> PROGRESS</div>
   <div class="subtitle">Multi-Task<br>Construction Tracker</div>
   <div style="font-size:11px;color:#000;background:var(--green);padding:3px 10px;border-radius:12px;font-weight:700;font-family:var(--font-mono)">v32</div>
@@ -1422,7 +1491,7 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>
       Dashboard
     </button>
-    <button class="btn" id="manpowerBtn" title="Quản lý nhân lực (kế hoạch & thực tế, biểu đồ, weekly snapshot)">
+    <button class="btn" id="manpowerBtn" title="Manpower management (plan & actual, charts, weekly snapshots)">
       👷 Manpower
     </button>
     <button class="btn" id="exportImageBtn" title="Export current floor plan as PNG">
@@ -1435,11 +1504,11 @@
     </div>
     <div class="role-badge" id="roleBadge" style="display:none">
       <span id="roleBadgeIcon">🏗</span><span id="roleBadgeText">NT</span>
-      <button class="logout-x" id="logoutBtn" title="Đổi vai trò / đăng xuất">✕</button>
+      <button class="logout-x" id="logoutBtn" title="Switch role / sign out">✕</button>
     </div>
-    <div class="plan-view-switch" id="planViewSwitch" style="display:none" title="Plan dùng để tính Status / Dashboard / Label">
+    <div class="plan-view-switch" id="planViewSwitch" style="display:none" title="Plan used for Status / Dashboard / Label">
       <span style="color:var(--muted);font-size:10px;letter-spacing:1px">VIEW:</span>
-      <button class="pv-btn active" data-pv="cdt">🏢 CĐT</button>
+      <button class="pv-btn active" data-pv="cdt">🏢 CDT</button>
       <button class="pv-btn" data-pv="nt">🏗 NT</button>
     </div>
     <button class="btn" id="cloudPushBtn" title="Upload the current state to the cloud (overwrites cloud copy)">
@@ -1453,36 +1522,36 @@
 <div class="modal-overlay" id="loginModal" style="z-index:300">
   <div class="modal" style="width:min(440px,92vw)">
     <div class="modal-header">
-      <h2>Đăng nhập</h2>
+      <h2>Sign in</h2>
     </div>
     <div class="modal-body" style="padding:24px">
-      <div style="font-size:13px;color:var(--muted);margin-bottom:18px">Chọn vai trò của bạn để vào hệ thống tiến độ SCM-B14:</div>
+      <div style="font-size:13px;color:var(--muted);margin-bottom:18px">Choose your role to access the SCM-B14 progress tracker:</div>
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:14px">
         <button class="role-btn" id="roleNTBtn">
           <div style="font-size:22px">🏗</div>
-          <div style="font-weight:600;font-size:12px">Nhà thầu</div>
+          <div style="font-weight:600;font-size:12px">Contractor</div>
           <div style="font-size:10px;color:var(--muted);margin-top:2px">Plan NT &amp; %</div>
         </button>
         <button class="role-btn" id="roleCDTBtn">
           <div style="font-size:22px">🏢</div>
-          <div style="font-weight:600;font-size:12px">Chủ đầu tư</div>
-          <div style="font-size:10px;color:var(--muted);margin-top:2px">Cần password</div>
+          <div style="font-weight:600;font-size:12px">Owner / CDT</div>
+          <div style="font-size:10px;color:var(--muted);margin-top:2px">Password required</div>
         </button>
         <button class="role-btn" id="roleAdminBtn">
           <div style="font-size:22px">🛠</div>
           <div style="font-weight:600;font-size:12px">Admin</div>
-          <div style="font-size:10px;color:var(--muted);margin-top:2px">Vẽ vùng &amp; toàn quyền</div>
+          <div style="font-size:10px;color:var(--muted);margin-top:2px">Draw areas & full access</div>
         </button>
       </div>
       <div id="roleCDTPwdBox" style="display:none">
-        <input type="password" id="roleCDTPwd" placeholder="Nhập password CĐT" style="width:100%;padding:10px;background:var(--panel-2);border:1px solid var(--border);color:var(--text);border-radius:6px;font-size:13px">
+        <input type="password" id="roleCDTPwd" placeholder="Enter CDT password" style="width:100%;padding:10px;background:var(--panel-2);border:1px solid var(--border);color:var(--text);border-radius:6px;font-size:13px">
         <div id="roleCDTPwdErr" style="color:var(--red);font-size:11px;margin-top:6px;display:none">Sai password.</div>
-        <button class="btn" id="roleCDTSubmit" style="margin-top:10px;width:100%">Vào CĐT</button>
+        <button class="btn" id="roleCDTSubmit" style="margin-top:10px;width:100%">Sign in as CDT</button>
       </div>
       <div id="roleAdminPwdBox" style="display:none">
-        <input type="password" id="roleAdminPwd" placeholder="Nhập password Admin" style="width:100%;padding:10px;background:var(--panel-2);border:1px solid var(--border);color:var(--text);border-radius:6px;font-size:13px">
+        <input type="password" id="roleAdminPwd" placeholder="Enter Admin password" style="width:100%;padding:10px;background:var(--panel-2);border:1px solid var(--border);color:var(--text);border-radius:6px;font-size:13px">
         <div id="roleAdminPwdErr" style="color:var(--red);font-size:11px;margin-top:6px;display:none">Sai password.</div>
-        <button class="btn" id="roleAdminSubmit" style="margin-top:10px;width:100%">Vào Admin</button>
+        <button class="btn" id="roleAdminSubmit" style="margin-top:10px;width:100%">Sign in as Admin</button>
       </div>
     </div>
   </div>
@@ -1507,18 +1576,18 @@
 <div class="modal-overlay" id="manpowerModal">
   <div class="modal">
     <div class="modal-header">
-      <h2>👷 Manpower — Nhân lực</h2>
+      <h2>👷 Manpower</h2>
       <div class="modal-actions">
-        <button class="btn small" id="mpExcelBtn" title="Export bảng manpower ra Excel">⬇ Excel</button>
-        <button class="btn small" id="mpSnapshotBtn" title="Lưu weekly snapshot từ cut-off date" style="background:#3b82f6;color:#fff">📸 Weekly Snapshot</button>
+        <button class="btn small" id="mpExcelBtn" title="Export manpower table to Excel">⬇ Excel</button>
+        <button class="btn small" id="mpSnapshotBtn" title="Save weekly snapshot from cut-off date" style="background:#3b82f6;color:#fff">📸 Weekly Snapshot</button>
         <button class="modal-close" id="mpCloseBtn">✕</button>
       </div>
     </div>
     <div class="modal-body" id="manpowerBody" style="padding:0">
       <!-- Tab bar -->
       <div class="mp-tabs">
-        <button class="mp-tab active" data-mp-tab="plan">📋 Plan (theo tháng)</button>
-        <button class="mp-tab" data-mp-tab="actual">📅 Actual (theo ngày)</button>
+        <button class="mp-tab active" data-mp-tab="plan">📋 Plan (monthly)</button>
+        <button class="mp-tab" data-mp-tab="actual">📅 Actual (daily)</button>
         <button class="mp-tab" data-mp-tab="byfloor">🏢 By Floor</button>
         <button class="mp-tab" data-mp-tab="chart">📊 Chart</button>
         <button class="mp-tab" data-mp-tab="weekly">📸 Weekly Snapshots</button>
@@ -1617,7 +1686,7 @@
           <span>Color by Task (not Status)</span>
           <div class="toggle" data-toggle="colorByTask"></div>
         </div>
-        <div class="toggle-row" title="Gom các zone cùng căn (vd A14.06-LIVING, A14.06-WC1, A14.06-YARD) thành 1 label trên canvas. Sidebar vẫn giữ nguyên từng zone.">
+        <div class="toggle-row" title="Group zones from the same apartment (e.g. A14.06-LIVING, A14.06-WC1, A14.06-YARD) into one label on the canvas. The sidebar still shows each zone individually.">
           <span>🏠 Group by apartment</span>
           <div class="toggle" data-toggle="groupByApartment"></div>
         </div>
@@ -1656,7 +1725,7 @@
           <div class="legend-item"><div class="legend-swatch" style="background:#6366f1"></div>Done before/on cutoff (previous)</div>
           <div class="legend-item"><div class="legend-swatch" style="background:#22d3ee"></div>Done after cutoff (this week)</div>
           <div class="legend-item"><div class="legend-swatch" style="background:#f59e0b"></div>Done 100% — no Actual End date</div>
-          <div class="legend-item"><div class="legend-swatch" style="background:#fb923c"></div>In progress (Actual &gt; 0, chưa xong)</div>
+          <div class="legend-item"><div class="legend-swatch" style="background:#fb923c"></div>In progress (Actual &gt; 0, not done)</div>
           <div class="legend-item"><div class="legend-swatch" style="background:#3a4250"></div>Not started yet</div>
         </div>
         <div class="compare-stats" id="compareStats" style="margin-top:10px"></div>
@@ -1775,33 +1844,33 @@
 <!-- PDF MULTI-PAGE MODE picker (v34: appears only when uploaded PDF has >1 page) -->
 <div class="modal-overlay" id="pdfModeModal">
   <div class="modal" style="width:min(520px,92vw)">
-    <h2>PDF nhiều trang</h2>
+    <h2>Multi-page PDF</h2>
     <div class="modal-hint">
-      File PDF có <strong id="pdfModeNumPages">?</strong> trang.
-      Chọn cách xử lý cho floor hiện tại:
+      The PDF has <strong id="pdfModeNumPages">?</strong> pages.
+      Choose how to handle the current floor:
     </div>
     <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:14px">
       <label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer;padding:8px;border:1px solid var(--border);border-radius:6px">
         <input type="radio" name="pdfMode" value="combine-2x2" checked style="margin-top:3px">
-        <div><b>🔲 Ghép thành 1 mặt bằng — Grid 2×2</b><br><small style="color:var(--muted)">Phù hợp khi mặt bằng vuông, chia 4 góc (4 trang)</small></div>
+        <div><b>🔲 Combine into 1 plan — Grid 2×2</b><br><small style="color:var(--muted)">For square floor plans split across 4 corners (4 pages)</small></div>
       </label>
       <label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer;padding:8px;border:1px solid var(--border);border-radius:6px">
         <input type="radio" name="pdfMode" value="combine-1xN" style="margin-top:3px">
-        <div><b>▭ Ghép thành 1 mặt bằng — Hàng ngang</b><br><small style="color:var(--muted)">Phù hợp mặt bằng dài, panoramic</small></div>
+        <div><b>▭ Combine into 1 plan — Horizontal row</b><br><small style="color:var(--muted)">For long, panoramic plans</small></div>
       </label>
       <label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer;padding:8px;border:1px solid var(--border);border-radius:6px">
         <input type="radio" name="pdfMode" value="combine-Nx1" style="margin-top:3px">
-        <div><b>▯ Ghép thành 1 mặt bằng — Cột dọc</b><br><small style="color:var(--muted)">Phù hợp mặt bằng cao</small></div>
+        <div><b>▯ Combine into 1 plan — Vertical column</b><br><small style="color:var(--muted)">For tall plans</small></div>
       </label>
       <label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer;padding:8px;border:1px solid var(--border);border-radius:6px">
         <input type="radio" name="pdfMode" value="multi-floor" style="margin-top:3px">
-        <div><b>📚 Tạo nhiều floor (1 trang = 1 floor)</b><br><small style="color:var(--muted)">Phù hợp khi mỗi trang là 1 tầng khác nhau</small></div>
+        <div><b>📚 Create multiple floors (1 page = 1 floor)</b><br><small style="color:var(--muted)">For PDFs where each page is a different floor</small></div>
       </label>
       <label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer;padding:8px;border:1px solid var(--border);border-radius:6px">
         <input type="radio" name="pdfMode" value="single" style="margin-top:3px">
-        <div><b>📄 Chỉ dùng 1 trang:</b>
+        <div><b>📄 Use only one page:</b>
           <select id="pdfModeSinglePage" style="margin-left:6px;padding:3px 8px;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:4px"></select>
-          <br><small style="color:var(--muted)">Bỏ qua các trang khác</small></div>
+          <br><small style="color:var(--muted)">Skip the other pages</small></div>
       </label>
     </div>
     <div class="modal-actions">
@@ -2152,24 +2221,24 @@ function renderMpPlanTab(editable){
     }
   }
   let html = '<div class="mp-toolbar">';
-  html += `<label>Tháng <input type="month" id="mpPlanMonthInput" value="${month}"></label>`;
-  html += `<div class="mp-stat"><span class="mp-stat-label">Man-days tháng</span><span class="mp-stat-val">${manDays}</span></div>`;
-  html += `<div class="mp-stat"><span class="mp-stat-label">Ngày có data</span><span class="mp-stat-val">${daysWithData}/${days}</span></div>`;
+  html += `<label>Month <input type="month" id="mpPlanMonthInput" value="${month}"></label>`;
+  html += `<div class="mp-stat"><span class="mp-stat-label">Man-days this month</span><span class="mp-stat-val">${manDays}</span></div>`;
+  html += `<div class="mp-stat"><span class="mp-stat-label">Days with data</span><span class="mp-stat-val">${daysWithData}/${days}</span></div>`;
   html += '<div style="flex:1"></div>';
   if(editable){
     html += '<div style="display:flex;gap:6px;align-items:center;border-left:1px solid var(--border);padding-left:10px;margin-left:6px">';
-    html += '<span style="font-size:11px;color:var(--muted)">Fill cả tháng:</span>';
+    html += '<span style="font-size:11px;color:var(--muted)">Fill entire month:</span>';
     TASKS.forEach(t => {
       html += `<label title="${t.name}" style="font-size:10px;color:var(--muted)">${t.short}<input class="mp-input" type="number" min="0" id="mpFill_${t.key}" style="width:50px;margin-left:4px"></label>`;
     });
     html += '<button class="btn-mini" id="mpFillBtn" style="background:#3b82f6;color:#fff;border-color:#3b82f6">Apply</button>';
-    html += '<button class="btn-mini" id="mpClearMonthBtn" title="Xóa toàn bộ Plan của tháng này">🗑 Clear</button>';
+    html += '<button class="btn-mini" id="mpClearMonthBtn" title="Clear this month\'s plan">🗑 Clear</button>';
     html += '</div>';
   }
   html += '</div>';
-  html += '<div style="font-size:11px;color:var(--muted);margin-bottom:8px">Nhập số thợ <b>kế hoạch</b> mỗi ngày. Dùng "Fill cả tháng" để điền nhanh rồi tinh chỉnh từng ngày.</div>';
+  html += '<div style="font-size:11px;color:var(--muted);margin-bottom:8px">Enter the <b>planned</b> headcount per day. Use "Fill entire month" to pre-fill and tweak day-by-day.</div>';
   html += '<div class="mp-table-wrap"><table class="mp-table"><thead><tr>';
-  html += '<th style="text-align:left">Ngày</th>';
+  html += '<th style="text-align:left">Date</th>';
   TASKS.forEach(t => html += `<th>${t.short}</th>`);
   html += '<th>Total</th></tr></thead><tbody>';
   for(let d = 1; d <= days; d++){
@@ -2196,7 +2265,7 @@ function renderMpActualTab(editable){
   const month = MP_STATE.actualMonth || mpToday().slice(0,7);
   const days = mpDaysInMonth(month);
   let html = '<div class="mp-toolbar">';
-  html += `<label>Tháng <input type="month" id="mpActualMonthInput" value="${month}"></label>`;
+  html += `<label>Month <input type="month" id="mpActualMonthInput" value="${month}"></label>`;
   // Quick stats
   let manDays = 0, daysWorked = 0;
   for(let d = 1; d <= days; d++){
@@ -2207,13 +2276,13 @@ function renderMpActualTab(editable){
       if(s > 0){ manDays += s; daysWorked++; }
     }
   }
-  html += `<div class="mp-stat"><span class="mp-stat-label">Man-days tháng</span><span class="mp-stat-val">${manDays}</span></div>`;
-  html += `<div class="mp-stat"><span class="mp-stat-label">Ngày có data</span><span class="mp-stat-val">${daysWorked}/${days}</span></div>`;
+  html += `<div class="mp-stat"><span class="mp-stat-label">Man-days this month</span><span class="mp-stat-val">${manDays}</span></div>`;
+  html += `<div class="mp-stat"><span class="mp-stat-label">Days with data</span><span class="mp-stat-val">${daysWorked}/${days}</span></div>`;
   html += '<div style="flex:1"></div>';
-  html += '<div style="font-size:11px;color:var(--muted)">Nhập số thợ làm ở mỗi trade trong ngày.</div>';
+  html += '<div style="font-size:11px;color:var(--muted)">Enter the actual headcount per trade for each day.</div>';
   html += '</div>';
   html += '<div class="mp-table-wrap"><table class="mp-table"><thead><tr>';
-  html += '<th style="text-align:left">Ngày</th>';
+  html += '<th style="text-align:left">Date</th>';
   TASKS.forEach(t => html += `<th>${t.short}</th>`);
   html += '<th>Total</th></tr></thead><tbody>';
   for(let d = 1; d <= days; d++){
@@ -2240,14 +2309,14 @@ function renderMpActualTab(editable){
 function renderMpByFloorTab(editable){
   const date = MP_STATE.byFloorDate || mpToday();
   let html = '<div class="mp-toolbar">';
-  html += `<label>Ngày <input type="date" id="mpByFloorDateInput" value="${date}"></label>`;
+  html += `<label>Date <input type="date" id="mpByFloorDateInput" value="${date}"></label>`;
   html += '<div style="flex:1"></div>';
-  html += '<div style="font-size:11px;color:var(--muted)">Phân bổ chi tiết theo tầng (tùy chọn). Cuối bảng là số chênh lệch vs Total ở tab Actual.</div>';
+  html += '<div style="font-size:11px;color:var(--muted)">Optional per-floor breakdown. The last row shows the gap vs the Actual tab totals.</div>';
   html += '</div>';
   const row = mpActualRow(date);
   const floors = STATE.floors.slice();
   html += '<div class="mp-table-wrap"><table class="mp-table"><thead><tr>';
-  html += '<th style="text-align:left">Tầng</th>';
+  html += '<th style="text-align:left">Floor</th>';
   TASKS.forEach(t => html += `<th>${t.short}</th>`);
   html += '<th>Sum</th></tr></thead><tbody>';
   // Per-floor rows
@@ -2292,21 +2361,21 @@ function renderMpByFloorTab(editable){
 // draws either a stacked bar or a line chart with pure SVG.
 
 function renderMpChartTab(){
-  const trades = [{key:'__all__', name:'Tổng', color:'#f59e0b'}].concat(TASKS.map(t => ({key:t.key, name:t.name, color:t.color})));
+  const trades = [{key:'__all__', name:'Total', color:'#f59e0b'}].concat(TASKS.map(t => ({key:t.key, name:t.name, color:t.color})));
   let html = '<div class="mp-toolbar">';
-  html += `<label>Từ <input type="date" id="mpChartFrom" value="${MP_STATE.chartFromDate}"></label>`;
-  html += `<label>Đến <input type="date" id="mpChartTo" value="${MP_STATE.chartToDate}"></label>`;
+  html += `<label>From <input type="date" id="mpChartFrom" value="${MP_STATE.chartFromDate}"></label>`;
+  html += `<label>To <input type="date" id="mpChartTo" value="${MP_STATE.chartToDate}"></label>`;
   html += '<label>Trade <select id="mpChartTrade">';
   trades.forEach(t => html += `<option value="${t.key}" ${MP_STATE.chartTrade===t.key?'selected':''}>${t.name}</option>`);
   html += '</select></label>';
-  html += '<label>Loại <select id="mpChartType">';
+  html += '<label>Type <select id="mpChartType">';
   html += `<option value="bar" ${MP_STATE.chartType==='bar'?'selected':''}>Stacked Bar</option>`;
   html += `<option value="line" ${MP_STATE.chartType==='line'?'selected':''}>Line</option></select></label>`;
-  html += '<label>Hiển thị <select id="mpChartShow">';
+  html += '<label>Show <select id="mpChartShow">';
   html += `<option value="both" ${MP_STATE.chartShow==='both'?'selected':''}>Plan + Actual</option>`;
   html += `<option value="plan" ${MP_STATE.chartShow==='plan'?'selected':''}>Plan only</option>`;
   html += `<option value="actual" ${MP_STATE.chartShow==='actual'?'selected':''}>Actual only</option></select></label>`;
-  html += '<label title="Plan tính theo ngày (giá trị từng ngày) hay theo tháng (TB tháng đó)">Plan mode <select id="mpChartPlanMode">';
+  html += '<label title="Plan computed per-day (each day\'s value) or per-month (monthly average)">Plan mode <select id="mpChartPlanMode">';
   html += `<option value="daily" ${MP_STATE.chartPlanMode==='daily'?'selected':''}>Daily</option>`;
   html += `<option value="monthly" ${MP_STATE.chartPlanMode==='monthly'?'selected':''}>Monthly avg</option></select></label>`;
   html += '</div>';
@@ -2370,7 +2439,7 @@ function drawMpChart(){
   while(svg.firstChild) svg.removeChild(svg.firstChild);
   const series = mpBuildSeries();
   if(!series || series.length === 0){
-    svg.innerHTML = '<text x="450" y="240" fill="#8b95a3" text-anchor="middle" font-family="ui-sans-serif" font-size="14">Chọn khoảng ngày hợp lệ để hiển thị biểu đồ.</text>';
+    svg.innerHTML = '<text x="450" y="240" fill="#8b95a3" text-anchor="middle" font-family="ui-sans-serif" font-size="14">Choose a valid date range to display the chart.</text>';
     return;
   }
   const W = 900, H = 480;
@@ -2517,14 +2586,14 @@ function renderMpWeeklyTab(){
   html += `<label>Cut-off date <input type="date" id="mpSnapDate" value="${mpToday()}"></label>`;
   if(editable) html += '<button class="btn-mini" id="mpDoSnapBtn" style="background:#3b82f6;color:#fff;border-color:#3b82f6">📸 Take snapshot now</button>';
   html += '<div style="flex:1"></div>';
-  html += `<div style="font-size:11px;color:var(--muted)">Snapshot lưu lại % actual của tất cả task + man-days trong tuần (7 ngày trước cut-off).</div>`;
+  html += `<div style="font-size:11px;color:var(--muted)">A snapshot captures the %actual of every task plus the week's man-days (the 7 days before the cut-off).</div>`;
   html += '</div>';
   if(snaps.length === 0){
-    html += '<div style="text-align:center;padding:60px 20px;color:var(--muted)">Chưa có snapshot nào. Chọn cut-off date và bấm "Take snapshot now".</div>';
+    html += '<div style="text-align:center;padding:60px 20px;color:var(--muted)">No snapshots yet. Pick a cut-off date and click "Take snapshot now".</div>';
     return html;
   }
   html += '<div class="mp-table-wrap"><table class="mp-table"><thead><tr>';
-  html += '<th style="text-align:left">Cut-off</th><th>Man-days tuần</th><th>%project</th><th>Δ% vs snap trước</th><th>Productivity (%/man-day)</th>';
+  html += '<th style="text-align:left">Cut-off</th><th>Man-days this week</th><th>%project</th><th>Δ% vs previous snap</th><th>Productivity (%/man-day)</th>';
   if(editable) html += '<th></th>';
   html += '</tr></thead><tbody>';
   snaps.forEach((s, i) => {
@@ -2613,8 +2682,8 @@ function attachMpHandlers(){
       const v = inp ? Number(inp.value) : 0;
       if(v > 0){ vals[t.key] = v; anyVal = true; }
     });
-    if(!anyVal){ alert('Nhập ít nhất 1 giá trị để fill.'); return; }
-    if(!confirm(`Ghi đè Plan của tất cả ${days} ngày trong tháng ${month}? Các giá trị có sẵn sẽ bị thay thế cho các trade đã nhập.`)) return;
+    if(!anyVal){ alert('Enter at least one value to fill.'); return; }
+    if(!confirm(`Overwrite the Plan for all ${days} days in ${month}? Existing values will be replaced for any trade you typed into.`)) return;
     for(let d = 1; d <= days; d++){
       const key = `${month}-${String(d).padStart(2,'0')}`;
       const row = mpPlanRow(key);
@@ -2626,7 +2695,7 @@ function attachMpHandlers(){
   const clearBtn = $('mpClearMonthBtn');
   if(clearBtn) clearBtn.addEventListener('click', () => {
     const month = MP_STATE.planMonth || mpToday().slice(0,7);
-    if(!confirm(`Xóa toàn bộ Plan của tháng ${month}?`)) return;
+    if(!confirm(`Clear the entire Plan for ${month}?`)) return;
     const days = mpDaysInMonth(month);
     for(let d = 1; d <= days; d++){
       const key = `${month}-${String(d).padStart(2,'0')}`;
@@ -2685,7 +2754,7 @@ function attachMpHandlers(){
   const snapBtn = $('mpDoSnapBtn');
   if(snapBtn) snapBtn.addEventListener('click', () => {
     const d = $('mpSnapDate').value;
-    if(!d) return alert('Chọn cut-off date');
+    if(!d) return alert('Pick a cut-off date');
     const s = takeWeeklySnapshot(d);
     if(s) alert(`Snapshot ${d}: ${s.manDays} man-days, ${s.projectPct.toFixed(1)}% project`);
     renderManpowerTab();
@@ -2693,7 +2762,7 @@ function attachMpHandlers(){
   document.querySelectorAll('[data-mp-del-snap]').forEach(b => {
     b.addEventListener('click', () => {
       const id = b.dataset.mpDelSnap;
-      if(!confirm('Xóa snapshot này?')) return;
+      if(!confirm('Delete this snapshot?')) return;
       STATE.weeklySnapshots = STATE.weeklySnapshots.filter(s => s.id !== id);
       
       pushManpowerToCloud();
@@ -3497,7 +3566,7 @@ async function combinePdfPagesToImage(pdf, mode){
 // Create one new floor per PDF page, placing them after the current floor.
 // Used when each page is a separate floor plan rather than tiles of one.
 async function createFloorsFromPdfPages(pdf, baseName){
-  if(!ROLE.isAdmin()){ alert('Chỉ Admin mới có thể thêm floor.'); return; }
+  if(!ROLE.isAdmin()){ alert('Only Admin can add a floor.'); return; }
   const baseN = (baseName||'PDF').replace(/\.pdf$/i, '');
   const numPages = pdf.numPages;
   const newFloors = [];
@@ -3563,7 +3632,7 @@ async function loadPdfAsImage(file){
       setFloorImage(dataUrl);
     }
   } catch(err){
-    alert('Lỗi khi xử lý PDF: ' + (err && err.message ? err.message : 'unknown error'));
+    alert('Error processing PDF: ' + (err && err.message ? err.message : 'unknown error'));
     console.error(err);
   }
 }
@@ -3630,7 +3699,7 @@ function duplicateFloor(){
 }
 
 async function deleteFloor(){
-  if(!ROLE.isAdmin()){ alert('Chỉ Admin mới có thể xóa floor.'); return; }
+  if(!ROLE.isAdmin()){ alert('Only Admin can delete a floor.'); return; }
   if(STATE.floors.length <= 1){
     alert('You must keep at least one floor.');
     return;
@@ -3713,7 +3782,7 @@ function copyAreasToFloors(){
 // Remove every floor that has zero areas (junk floors). Also deletes them from
 // the cloud (/floors and /cdtPlan).
 async function cleanupEmptyFloors(){
-  if(!ROLE.isAdmin()){ alert('Chỉ Admin mới có thể cleanup floors.'); return; }
+  if(!ROLE.isAdmin()){ alert('Only Admin can clean up empty floors.'); return; }
   const empty = STATE.floors.filter(f => (f.areas||[]).length === 0);
   if(empty.length === 0){ alert('No empty floors found. Nothing to clean up.'); return; }
   // Refuse to delete the currently-selected one if it's the only floor we have left
@@ -3769,7 +3838,7 @@ async function cleanupEmptyFloors(){
 // the arrays makes Initial Plan fall back to current and removes the
 // strikethrough clutter. The current plan dates are NOT touched.
 async function resetPlanHistory(){
-  if(!ROLE.isAdmin()){ alert('Chỉ Admin mới có thể reset plan history.'); return; }
+  if(!ROLE.isAdmin()){ alert('Only Admin can reset plan history.'); return; }
   if(!confirm(
     'Reset plan history for ALL areas across ALL floors?\n\n' +
     '• Current plan dates are KEPT (Plan Start/End CDT & NT stay as-is).\n' +
@@ -3944,7 +4013,7 @@ function planFields(){
     return {
       start:'planStartCDT', end:'planEndCDT',
       startHist:'planStartCDTHistory', endHist:'planEndCDTHistory',
-      label:'CĐT',
+      label:'CDT',
     };
   }
   return {
@@ -4088,6 +4157,22 @@ function init(){
   const _toggleSidebar = (open) => {
     if(!_sidebar) return;
     const should = (open !== undefined) ? open : !_sidebar.classList.contains('open');
+    // On mobile, anchor the sidebar drawer below whatever is sticky at the top
+    // (DEV banner + header). The banner may wrap to multiple lines on narrow
+    // screens, so we measure at open time rather than using a static offset.
+    if(should && window.innerWidth <= 768){
+      const banner = document.getElementById('devBanner');
+      const header = document.querySelector('header');
+      let offset = 0;
+      if(banner) offset = Math.max(offset, banner.getBoundingClientRect().bottom);
+      if(header) offset = Math.max(offset, header.getBoundingClientRect().bottom);
+      offset = Math.max(0, offset);
+      _sidebar.style.top = offset + 'px';
+      _sidebar.style.height = `calc(100vh - ${offset}px)`;
+    } else {
+      _sidebar.style.top = '';
+      _sidebar.style.height = '';
+    }
     _sidebar.classList.toggle('open', should);
     if(_backdrop) _backdrop.classList.toggle('show', should);
   };
@@ -4177,7 +4262,7 @@ function init(){
   });
   // Excel export placeholder
   $('mpExcelBtn').addEventListener('click', () => {
-    alert('Export Excel cho manpower sẽ thêm trong version sau. Tạm thời dùng Push to Cloud để backup.');
+    alert('Manpower Excel export coming in a later version. Use Push to Cloud as a backup for now.');
   });
   $('dashCloseBtn').addEventListener('click', closeDashboard);
   $('dashboardModal').addEventListener('click', e => {
@@ -4336,7 +4421,7 @@ function setupAreaListDelegation(){
     const nameEl = e.target.closest('.name-text');
     if(!nameEl) return;
     if(!ROLE.isAdmin()){
-      alert('Chỉ Admin mới có thể đổi tên vùng.');
+      alert('Only Admin can rename an area.');
       return;
     }
     const area = findAreaFromEvent(e);
@@ -4352,7 +4437,7 @@ function setupAreaListDelegation(){
       // Only CDT/Admin can erase the contractor's plan revisions. NT must
       // keep all their own previous commitments visible (and CDT's too).
       if(!ROLE.canEditCDT()){
-        alert('Chỉ Chủ đầu tư (CĐT) hoặc Admin mới được xóa lịch sử plan.\nNhà thầu có thể nhập plan mới — plan cũ sẽ tự động lưu vào lịch sử.');
+        alert('Only Owner (CDT) or Admin can delete plan history.\nContractors can enter new plan values — the old values are automatically saved to history.');
         return;
       }
       const area = findAreaFromEvent(e);
@@ -4514,7 +4599,7 @@ function setMode(m){
   // Drawing/editing polygons is admin-only. CDT and NT may switch between
   // select / pan modes for inspection, but draw lands them back on select.
   if(m === 'draw' && !ROLE.isAdmin()){
-    alert('Chỉ Admin mới có thể vẽ hoặc chỉnh sửa vùng.');
+    alert('Only Admin can draw or edit areas.');
     m = 'select';
   }
   STATE.mode = m;
@@ -4854,7 +4939,7 @@ function startInlineRename(area, nameEl){
 }
 
 function openRenameModal(area){
-  if(!ROLE.isAdmin()){ alert('Chỉ Admin mới có thể đổi tên vùng.'); return; }
+  if(!ROLE.isAdmin()){ alert('Only Admin can rename an area.'); return; }
   $('renameInput').value = area.name;
   $('renameInput').dataset.id = area.id;
   $('renameModal').classList.add('show');
@@ -4871,7 +4956,7 @@ function saveRename(){
 }
 
 function deleteArea(id){
-  if(!ROLE.isAdmin()){ alert('Chỉ Admin mới có thể xóa vùng.'); return; }
+  if(!ROLE.isAdmin()){ alert('Only Admin can delete an area.'); return; }
   if(!confirm('Delete this area and all its task data?')) return;
   STATE.areas = STATE.areas.filter(a => a.id !== id);
   if(STATE.selectedId === id){ STATE.selectedId = null; closeDetailPanel(); }
@@ -5666,7 +5751,7 @@ function showTooltip(e, area){
       return;
     }
     const planRowHtml = ROLE.canEditCDT()
-      ? `<div class="row"><span>Plan CĐT:</span><span>${fmtDate(taskPlanStartCDT(td))} → ${fmtDate(taskPlanEndCDT(td))}</span></div>
+      ? `<div class="row"><span>Plan CDT:</span><span>${fmtDate(taskPlanStartCDT(td))} → ${fmtDate(taskPlanEndCDT(td))}</span></div>
          <div class="row"><span>Plan NT:</span><span>${fmtDate(taskPlanStartNT(td))} → ${fmtDate(taskPlanEndNT(td))}</span></div>`
       : `<div class="row"><span>Plan:</span><span>${fmtDate(taskPlanStart(td))} → ${fmtDate(taskPlanEnd(td))}</span></div>`;
     tasksHtml += `
@@ -5952,7 +6037,7 @@ function renderAreaCard(area){
         const otherIsCDT = activePlan() !== 'cdt';
         const otherStart = otherIsCDT ? taskPlanStartCDT(td) : taskPlanStartNT(td);
         const otherEnd   = otherIsCDT ? taskPlanEndCDT(td)   : taskPlanEndNT(td);
-        const otherLabel = otherIsCDT ? '🏢 CĐT' : '🏗 NT';
+        const otherLabel = otherIsCDT ? '🏢 CDT' : '🏗 NT';
         const otherCls   = otherIsCDT ? 'dual-cdt' : 'dual-nt';
         const buf = planBufferDays(td);
         const bufTxt = (buf===null) ? '' : ` · buffer ${buf>0?'+':''}${buf}d`;
@@ -5996,12 +6081,128 @@ function openDetailPanel(areaId){
 function closeDetailPanel(){
   $('detailPanel').classList.remove('show');
 }
+// =========================================================================
+// Mobile simplified detail panel: every trade rendered as a compact card,
+// stacked vertically. Only fields a site engineer needs on a phone walk:
+// actual start, actual end, and %actual. Plan dates shown as small text
+// for reference but not editable here (use desktop for plan edits / history).
+// =========================================================================
+function renderMobileDetailPanel(area){
+  const fmtDmy = (s) => {
+    if(!s) return '—';
+    const [y,m,d] = s.split('-');
+    return `${d}/${m}`;
+  };
+  const planRow = (label, start, end) => `
+    <div><b>${label}:</b> ${fmtDmy(start)} → ${fmtDmy(end)}</div>
+  `;
+
+  const body = $('detailBody');
+  body.innerHTML = TASKS.map(t => {
+    const td = area.tasks[t.key];
+    const st = calcTaskStatus(td);
+    const actPct = Math.round(Number(td.percentActual)||0);
+    const planLines = ROLE.canEditCDT()
+      ? planRow('Plan CDT', td.planStartCDT, td.planEndCDT) + planRow('Plan NT', td.planStartNT, td.planEndNT)
+      : planRow('Plan NT', taskPlanStartNT(td), taskPlanEndNT(td));
+    return `
+      <div class="m-trade-card ${td.na ? 'is-na' : ''}" data-trade-key="${t.key}">
+        <div class="m-trade-head">
+          <div class="dot" style="background:${t.color}"></div>
+          <div class="name">${t.name}</div>
+          <div class="pill badge-${st.status}">${st.label.split(' ')[0]}</div>
+        </div>
+        <div class="m-trade-plan">${planLines}</div>
+        <div class="m-trade-grid">
+          <div class="detail-field">
+            <label>Actual Start</label>
+            <input type="date" data-mfield="actualStart" data-trade-key="${t.key}" value="${td.actualStart||''}">
+          </div>
+          <div class="detail-field">
+            <label>Actual End</label>
+            <input type="date" data-mfield="actualEnd" data-trade-key="${t.key}" value="${td.actualEnd||''}">
+          </div>
+        </div>
+        <div class="m-trade-pct">
+          <label>% Actual</label>
+          <input type="number" min="0" max="100" step="1" data-mfield="percentActual" data-trade-key="${t.key}" value="${actPct}">
+          <span class="pct-suffix">%</span>
+        </div>
+        <div class="m-na-toggle">
+          <span>Not applicable (N/A)</span>
+          <div class="toggle ${td.na ? 'on' : ''}" data-mna="${t.key}"></div>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  wireMobileDetailInputs(area);
+}
+
+function wireMobileDetailInputs(area){
+  const body = $('detailBody');
+
+  body.querySelectorAll('input[data-mfield]').forEach(inp => {
+    inp.addEventListener('input', () => {
+      const tk = inp.dataset.tradeKey;
+      const f  = inp.dataset.mfield;
+      const td = area.tasks[tk];
+      if(!td) return;
+      if(f === 'percentActual'){
+        const v = inp.value === '' ? 0 : Math.max(0, Math.min(100, Number(inp.value)));
+        td.percentActual = v;
+      } else {
+        td[f] = inp.value;
+      }
+      renderCanvasOnly();
+      renderStats();
+      updateTaskCounts();
+      refreshSidebarCardQuietly(area);
+      // refresh that card's status pill quickly
+      const card = inp.closest('.m-trade-card');
+      if(card){
+        const st = calcTaskStatus(td);
+        const pill = card.querySelector('.pill');
+        if(pill){ pill.className = 'pill badge-' + st.status; pill.textContent = st.label.split(' ')[0]; }
+      }
+    });
+  });
+
+  body.querySelectorAll('[data-mna]').forEach(tog => {
+    tog.addEventListener('click', () => {
+      const tk = tog.dataset.mna;
+      const td = area.tasks[tk];
+      if(!td) return;
+      td.na = !td.na;
+      renderMobileDetailPanel(area);
+      renderCanvasOnly();
+      renderStats();
+      renderCompareStats();
+      updateTaskCounts();
+      refreshSidebarCardQuietly(area);
+    });
+  });
+}
+
 function renderDetailPanel(){
   const area = STATE.areas.find(a => a.id === STATE.selectedId);
   if(!area){ closeDetailPanel(); return; }
   ensureAreaTasks(area);
 
   $('detailTitle').textContent = area.name;
+
+  // On phones, swap to a stripped-down "site-engineer mode" view that shows
+  // every trade as a compact card with just plan-dates (read-only), actual
+  // start/end and %actual. No tabs, no history, no buffer math — those are
+  // hard to use on a small screen and rarely needed while walking the site.
+  const panel = $('detailPanel');
+  if(window.innerWidth <= 768){
+    panel.classList.add('mobile-simple');
+    renderMobileDetailPanel(area);
+    return;
+  } else {
+    panel.classList.remove('mobile-simple');
+  }
 
   // Build tabs (one per trade)
   const tabsEl = $('detailTabs');
@@ -6047,8 +6248,8 @@ function renderDetailPanel(){
       ${ROLE.canEditCDT() ? `
         <div class="plan-dual-block">
           <div class="plan-dual-header">
-            <span>🏢 Plan CĐT</span>
-            <span style="color:var(--muted);font-weight:400;font-size:10px">có buffer</span>
+            <span>🏢 Plan CDT</span>
+            <span style="color:var(--muted);font-weight:400;font-size:10px">with buffer</span>
           </div>
           <div class="detail-grid-2">
             <div class="detail-field">
@@ -6064,7 +6265,7 @@ function renderDetailPanel(){
         <div class="plan-dual-block">
           <div class="plan-dual-header">
             <span>🏗 Plan NT</span>
-            <span style="color:var(--muted);font-weight:400;font-size:10px">deadline NT thấy</span>
+            <span style="color:var(--muted);font-weight:400;font-size:10px">deadline visible to NT</span>
           </div>
           <div class="detail-grid-2">
             <div class="detail-field">
@@ -6077,7 +6278,7 @@ function renderDetailPanel(){
             </div>
           </div>
         </div>
-        ${(()=>{const b=planBufferDays(td); if(b===null) return ''; const sign=b>0?'+':''; const col=b>0?'#22c55e':(b<0?'#ef4444':'var(--muted)'); return `<div class="plan-buffer-row">Buffer (CĐT − NT): <b style="color:${col}">${sign}${b} ngày</b></div>`;})()}
+        ${(()=>{const b=planBufferDays(td); if(b===null) return ''; const sign=b>0?'+':''; const col=b>0?'#22c55e':(b<0?'#ef4444':'var(--muted)'); return `<div class="plan-buffer-row">Buffer (CDT − NT): <b style="color:${col}">${sign}${b} days</b></div>`;})()}
       ` : `
         <div class="detail-section-label" style="border-top:none;padding-top:0;margin-top:0">Plan Dates (NT)</div>
         <div class="detail-grid-2">
@@ -6173,7 +6374,7 @@ function wireDetailInputs(area){
         else{
           const sign = b > 0 ? '+' : '';
           const col = b > 0 ? '#22c55e' : (b < 0 ? '#ef4444' : 'var(--muted)');
-          bufRow.innerHTML = `Buffer (CĐT − NT): <b style="color:${col}">${sign}${b} ngày</b>`;
+          bufRow.innerHTML = `Buffer (CDT − NT): <b style="color:${col}">${sign}${b} days</b>`;
           bufRow.style.display = '';
         }
       }
@@ -6208,7 +6409,7 @@ function wireDetailInputs(area){
       e.stopPropagation();
       // NT can never delete plan history — old commitments must stay visible
       if(!ROLE.canEditCDT()){
-        alert('Chỉ Chủ đầu tư (CĐT) hoặc Admin mới được xóa lịch sử plan.\nNhà thầu có thể nhập plan mới — plan cũ sẽ tự động lưu vào lịch sử.');
+        alert('Only Owner (CDT) or Admin can delete plan history.\nContractors can enter new plan values — the old values are automatically saved to history.');
         return;
       }
       const td = area.tasks[STATE.detailTab];
@@ -7186,7 +7387,7 @@ function mergeCdtPlanIntoFloor(floor, cdtDoc){
 
 async function cloudPushAll(){
   if(!window.FB || !window.FB.ready){ alert('Cloud not ready yet.'); return; }
-  if(!ROLE.isAdmin()){ alert('Chỉ Admin mới có thể Push to Cloud.'); return; }
+  if(!ROLE.isAdmin()){ alert('Only Admin can Push to Cloud.'); return; }
   try{
     setCloudStatus('saving','Pushing all…');
     const { db, doc, setDoc, collection, getDocs, deleteDoc } = window.FB;
@@ -7543,7 +7744,7 @@ function updateRoleUI(){
   badge.classList.remove('cdt','nt','admin');
   badge.classList.add(ROLE.current);
   const icons = { admin:'🛠', cdt:'🏢', nt:'🏗' };
-  const labels = { admin:'Admin', cdt:'CĐT', nt:'NT' };
+  const labels = { admin:'Admin', cdt:'CDT', nt:'NT' };
   $('roleBadgeIcon').textContent = icons[ROLE.current] || '';
   $('roleBadgeText').textContent = labels[ROLE.current] || '';
 }
@@ -7674,7 +7875,7 @@ function boot(){
   });
   const submitCDT = async () => {
     const pwd = $('roleCDTPwd').value;
-    if(!pwd){ $('roleCDTPwdErr').textContent = 'Nhập password.'; $('roleCDTPwdErr').style.display=''; return; }
+    if(!pwd){ $('roleCDTPwdErr').textContent = 'Please enter the password.'; $('roleCDTPwdErr').style.display=''; return; }
     const res = await chooseRole('cdt', pwd);
     if(res !== true){
       // err.code: 'auth/wrong-password', 'auth/invalid-credential', etc.
@@ -7698,7 +7899,7 @@ function boot(){
   });
   const submitAdmin = async () => {
     const pwd = $('roleAdminPwd').value;
-    if(!pwd){ $('roleAdminPwdErr').textContent = 'Nhập password.'; $('roleAdminPwdErr').style.display=''; return; }
+    if(!pwd){ $('roleAdminPwdErr').textContent = 'Please enter the password.'; $('roleAdminPwdErr').style.display=''; return; }
     if(pwd !== ADMIN_PASSWORD){
       $('roleAdminPwdErr').textContent = 'Sai password.';
       $('roleAdminPwdErr').style.display = '';
@@ -7713,11 +7914,11 @@ function boot(){
     // NOTE: this means an Admin client doesn't actually have write access at
     // the Firestore level — only CDT does. For polygon edits Admin needs to
     // ALSO have signed in with CDT creds. Two-step path:
-    const cdtPwd = prompt('Nhập password CĐT để xác thực với cloud:');
+    const cdtPwd = prompt('Enter CDT password to authenticate with the cloud:');
     if(!cdtPwd) return;
     const res = await chooseRole('admin', cdtPwd);
     if(res !== true){
-      $('roleAdminPwdErr').textContent = 'Sai password CĐT.';
+      $('roleAdminPwdErr').textContent = 'Sai password CDT.';
       $('roleAdminPwdErr').style.display = '';
       ROLE.adminUnlocked = false;
       setCloudStatus('error','Sign-in failed');
@@ -7743,7 +7944,7 @@ function boot(){
 
   // Wire push button (Admin only — also enforced server-side)
   $('cloudPushBtn').addEventListener('click', () => {
-    if(!ROLE.isAdmin()){ alert('Chỉ Admin mới có thể Push to Cloud.'); return; }
+    if(!ROLE.isAdmin()){ alert('Only Admin can Push to Cloud.'); return; }
     if(confirm('Push the current local state to the cloud? This OVERWRITES the cloud copy with what you see here.')) cloudPushAll();
   });
 
