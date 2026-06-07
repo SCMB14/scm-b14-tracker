@@ -1540,6 +1540,30 @@
       font-size:15px;font-weight:700;
       color:var(--text);
     }
+    /* In-QE cloud sync indicator. The header cloud-status pill is hidden under
+       the QE overlay on mobile, so without this the user has no idea if their
+       inputs are actually saving. */
+    .qe-sync{
+      display:flex;align-items:center;gap:5px;
+      font-size:10px;font-weight:600;
+      padding:4px 8px;
+      border-radius:10px;
+      border:1px solid var(--border);
+      background:var(--panel-2);
+      color:var(--muted);
+      white-space:nowrap;
+    }
+    .qe-sync .qe-sync-dot{
+      width:7px;height:7px;border-radius:50%;
+      background:var(--muted);flex-shrink:0;
+    }
+    .qe-sync.connecting .qe-sync-dot{background:#f59e0b;animation:qe-pulse 1s ease-in-out infinite}
+    .qe-sync.saving     .qe-sync-dot{background:#3b82f6;animation:qe-pulse 1s ease-in-out infinite}
+    .qe-sync.synced     .qe-sync-dot{background:#10b981}
+    .qe-sync.error      .qe-sync-dot{background:#ef4444}
+    .qe-sync.synced{color:#10b981;border-color:#10b98144}
+    .qe-sync.error {color:#ef4444;border-color:#ef444466;background:#ef444411}
+    @keyframes qe-pulse{0%,100%{opacity:1}50%{opacity:.4}}
     .qe-close{
       width:36px;height:36px;
       display:flex;align-items:center;justify-content:center;
@@ -1740,7 +1764,7 @@
   <button class="quick-entry-btn" id="quickEntryBtn" title="Quick Entry — fast per-unit progress input" aria-label="Quick Entry">⚡</button>
   <div class="logo">SCM<span>·B14</span> PROGRESS</div>
   <div class="subtitle">Multi-Task<br>Construction Tracker</div>
-  <div style="font-size:11px;color:#000;background:var(--green);padding:3px 10px;border-radius:12px;font-weight:700;font-family:var(--font-mono)">v35</div>
+  <div style="font-size:11px;color:#000;background:var(--green);padding:3px 10px;border-radius:12px;font-weight:700;font-family:var(--font-mono)">v36</div>
   <div class="toolbar">
     <button class="btn" id="loadImageBtn" title="Load floor plan (image or PDF) for the current floor">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg>
@@ -1809,6 +1833,10 @@
 <div class="qe-overlay" id="qeOverlay" aria-hidden="true">
   <div class="qe-topbar">
     <h2>⚡ Quick Entry</h2>
+    <div class="qe-sync" id="qeSync" title="Cloud sync status">
+      <span class="qe-sync-dot" id="qeSyncDot"></span>
+      <span id="qeSyncText">—</span>
+    </div>
     <button class="qe-close" id="qeCloseBtn" aria-label="Close Quick Entry">×</button>
   </div>
   <div class="qe-selectors">
@@ -6630,6 +6658,10 @@ function qeOpen(){
 }
 
 function qeClose(){
+  // Guarantee that any debounced save (1.5s timer) is flushed BEFORE the
+  // user closes the overlay, otherwise tapping × right after entering a %
+  // could lose that last input if the browser kills the page.
+  if(typeof flushCloudSave === 'function') flushCloudSave();
   QE.open = false;
   $('qeOverlay').classList.remove('open');
   $('qeOverlay').setAttribute('aria-hidden', 'true');
@@ -6815,6 +6847,10 @@ function qeWireCards(){
 
 // ---- Pickers ----
 function qeOpenPicker(kind){
+  // Flush pending save before opening a picker — the user is about to switch
+  // context (Floor/Unit/Trade), so we don't want the current view's last
+  // input to live only in the 1.5s debounce timer.
+  if(typeof flushCloudSave === 'function') flushCloudSave();
   QE.pickerKind = kind;
   const titleMap = { floor: 'Select Floor', unit: 'Select Apartment', trade: 'Select Trade' };
   $('qePickerTitle').textContent = titleMap[kind] || 'Select';
@@ -6886,6 +6922,9 @@ function qeClosePicker(){
 
 // ---- Prev/Next unit ----
 function qeStepUnit(delta){
+  // Flush any pending save before switching units so the previous unit's
+  // edits are guaranteed to land in Firestore.
+  if(typeof flushCloudSave === 'function') flushCloudSave();
   const units = qeGetUnitsForFloor(currentFloor());
   const idx = units.findIndex(u => u.prefix === QE.unitPrefix);
   const next = idx + delta;
@@ -6913,6 +6952,20 @@ function initQuickEntry(){
 }
 // Defer wiring to next tick so the DOM elements above are guaranteed live.
 setTimeout(initQuickEntry, 0);
+
+// When the user backgrounds the app (switches to Telegram, locks the screen,
+// receives a call, etc.), the browser may suspend our debounce timer and the
+// last edit could be lost. Flush immediately on visibility loss so the most
+// recent input lands in Firestore even if the page is killed shortly after.
+document.addEventListener('visibilitychange', () => {
+  if(document.visibilityState === 'hidden'){
+    if(typeof flushCloudSave === 'function') flushCloudSave();
+  }
+});
+// pagehide fires on iOS Safari when the page is unloaded (BFCache or close)
+window.addEventListener('pagehide', () => {
+  if(typeof flushCloudSave === 'function') flushCloudSave();
+});
 
 function renderDetailPanel(){
   const area = STATE.areas.find(a => a.id === STATE.selectedId);
@@ -8018,9 +8071,71 @@ const CLOUD = {
 function setCloudStatus(state, text){
   const dot = document.getElementById('cloudDot');
   const txt = document.getElementById('cloudText');
-  if(!dot || !txt) return;
-  dot.className = 'cloud-dot ' + state;
-  txt.textContent = text;
+  if(dot) dot.className = 'cloud-dot ' + state;
+  if(txt) txt.textContent = text;
+  // Mirror status into the Quick Entry overlay so users have visibility while
+  // the header is covered by the QE full-screen view.
+  const qeDot = document.getElementById('qeSyncDot');
+  const qeTxt = document.getElementById('qeSyncText');
+  const qeBox = document.getElementById('qeSync');
+  if(qeBox) qeBox.className = 'qe-sync ' + state;
+  if(qeTxt) qeTxt.textContent = text;
+}
+
+// Immediately fires any pending debounced cloud save. Use this before
+// navigation actions (Prev/Next unit, close QE, switch floor) so the user's
+// most recent inputs are guaranteed to land in Firestore even if they
+// background the app right after.
+function flushCloudSave(){
+  if(!CLOUD.saveTimer) return;
+  clearTimeout(CLOUD.saveTimer);
+  CLOUD.saveTimer = null;
+  // Re-trigger save with no debounce by calling the inner save logic.
+  // Simplest portable way: call scheduleCloudSave then immediately fire
+  // its timer. We can't expose the inner closure directly, so we replicate
+  // the minimal work here.
+  if(!window.FB || !window.FB.ready) return;
+  if(CLOUD.applyingRemote) return;
+  if(!ROLE.current) return;
+  if(!CLOUD.floorsSyncedOnce) return;
+  if(ROLE.canEditCDT() && !CLOUD.cdtPlanSyncedOnce) return;
+  setCloudStatus('saving','Saving…');
+  (async () => {
+    try{
+      const { db, doc, setDoc } = window.FB;
+      const cf = currentFloor();
+      if(ROLE.canEditCDT()){
+        await setDoc(doc(db,'projects', CLOUD.PROJECT_ID,'meta','main'), buildMetaDoc());
+        if(cf){
+          const hasAreas = (cf.areas||[]).length > 0;
+          let hasAnyCdtData = false;
+          if(hasAreas){
+            outer: for(const a of cf.areas){
+              for(const k of Object.keys(a.tasks||{})){
+                const t = a.tasks[k];
+                if(t.planStartCDT || t.planEndCDT ||
+                   (Array.isArray(t.planStartCDTHistory) && t.planStartCDTHistory.length) ||
+                   (Array.isArray(t.planEndCDTHistory)   && t.planEndCDTHistory.length)){
+                  hasAnyCdtData = true; break outer;
+                }
+              }
+            }
+          }
+          if(!hasAreas || hasAnyCdtData){
+            await setDoc(doc(db,'projects', CLOUD.PROJECT_ID,'cdtPlan', cf.id), buildCdtPlanDoc(cf));
+          }
+        }
+      }
+      if(cf){
+        await setDoc(doc(db,'projects', CLOUD.PROJECT_ID,'floors', cf.id), buildFloorDoc(cf));
+        CLOUD.lastFloorImageHash[cf.id] = strHash(cf.image||'');
+      }
+      setCloudStatus('synced','Synced ' + new Date().toLocaleTimeString().slice(0,5));
+    } catch(err){
+      console.error(err);
+      setCloudStatus('error','Save failed');
+    }
+  })();
 }
 
 function strHash(s){
