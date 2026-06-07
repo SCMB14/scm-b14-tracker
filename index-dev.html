@@ -1764,7 +1764,7 @@
   <button class="quick-entry-btn" id="quickEntryBtn" title="Quick Entry — fast per-unit progress input" aria-label="Quick Entry">⚡</button>
   <div class="logo">SCM<span>·B14</span> PROGRESS</div>
   <div class="subtitle">Multi-Task<br>Construction Tracker</div>
-  <div style="font-size:11px;color:#000;background:var(--green);padding:3px 10px;border-radius:12px;font-weight:700;font-family:var(--font-mono)">v36</div>
+  <div style="font-size:11px;color:#000;background:var(--green);padding:3px 10px;border-radius:12px;font-weight:700;font-family:var(--font-mono)">v37</div>
   <div class="toolbar">
     <button class="btn" id="loadImageBtn" title="Load floor plan (image or PDF) for the current floor">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg>
@@ -6652,8 +6652,20 @@ function qeOpen(){
   if(STATE.currentTask === '__all__'){
     STATE.currentTask = TASKS[0].key;
   }
-  $('qeOverlay').classList.add('open');
-  $('qeOverlay').setAttribute('aria-hidden', 'false');
+  const overlay = $('qeOverlay');
+  overlay.classList.add('open');
+  overlay.setAttribute('aria-hidden', 'false');
+  // The dev banner sits at z-index 99999 (above the QE overlay's z-index 9000),
+  // so without this offset the banner covers the QE topbar — hiding the
+  // "⚡ Quick Entry" title, the cloud sync indicator, and the close (×) button.
+  // Push the overlay top down by the banner height when present. In prod the
+  // banner doesn't exist, so the overlay anchors at top:0 normally.
+  const banner = document.getElementById('devBanner');
+  if(banner && banner.offsetHeight > 0){
+    overlay.style.top = banner.offsetHeight + 'px';
+  } else {
+    overlay.style.top = '0';
+  }
   renderQuickEntry();
 }
 
