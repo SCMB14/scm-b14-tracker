@@ -1764,7 +1764,7 @@
   <button class="quick-entry-btn" id="quickEntryBtn" title="Quick Entry — fast per-unit progress input" aria-label="Quick Entry">⚡</button>
   <div class="logo">SCM<span>·B14</span> PROGRESS</div>
   <div class="subtitle">Multi-Task<br>Construction Tracker</div>
-  <div style="font-size:11px;color:#000;background:var(--green);padding:3px 10px;border-radius:12px;font-weight:700;font-family:var(--font-mono)">v41</div>
+  <div style="font-size:11px;color:#000;background:var(--green);padding:3px 10px;border-radius:12px;font-weight:700;font-family:var(--font-mono)">v45</div>
   <div class="toolbar">
     <button class="btn" id="loadImageBtn" title="Load floor plan (image or PDF) for the current floor">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg>
@@ -1975,7 +1975,7 @@
       <button class="floor-btn wide" id="cleanupFloorsBtn" style="margin-top:6px;border-color:#ef4444;color:#ef4444">🧹 Cleanup empty floors</button>
       <button class="floor-btn wide" id="resetHistoryBtn" style="margin-top:6px;border-color:#ef4444;color:#ef4444">🗑 Reset plan history</button>
       <button class="floor-btn wide" id="reloadCloudBtn" style="margin-top:6px;border-color:#3b82f6;color:#3b82f6">🔄 Force reload from cloud</button>
-      <div class="hint" style="margin-top:6px">Each floor keeps its own progress &amp; plan image. After "+ Add", use <b>Load Plan</b> (top bar) to upload an image or PDF for that floor. "Copy areas" copies only shapes (names &amp; outlines), not dates/%.</div>
+      <div class="hint" style="margin-top:6px">Each floor keeps its own progress &amp; plan image. After "+ Add", use <b>Load Plan</b> (top bar) to upload an image or PDF for that floor. <b>Copy areas</b> can now also auto-create floors (e.g. <code>new: 5F-24F</code>) and rename areas by pattern (e.g. <code>A04 → A{NN}</code>) — copies shapes only, not dates/%.</div>
     </div>
 
     <!-- TASK SELECTOR -->
@@ -4063,8 +4063,18 @@ function duplicateFloor(){
   if(!f) return;
   const copy = makeFloor(f.name + ' (copy)', f.image);
   copy.imgW = f.imgW; copy.imgH = f.imgH;
-  // deep-copy areas WITH their data (full duplicate)
-  copy.areas = JSON.parse(JSON.stringify(f.areas));
+  // === ID FRESHNESS FIX (v44) ===
+  // Old code: JSON.parse(JSON.stringify(f.areas)) — preserved every area's
+  // original ID across floors, so two different floors had two areas with
+  // the SAME id. That broke selection (clicking one selected both),
+  // Excel/JSON imports, and Firestore writes (the cloud doc was keyed by
+  // floor.id but areas inside that floor expected unique area.id).
+  // Now: deep-clone the data per area but mint a fresh area.id for each.
+  copy.areas = (f.areas||[]).map(a => {
+    const cloned = JSON.parse(JSON.stringify(a));
+    cloned.id = 'area_' + Date.now() + '_' + Math.floor(Math.random()*100000);
+    return cloned;
+  });
   STATE.floors.push(copy);
   switchToFloor(copy.id);
 }
@@ -4107,47 +4117,167 @@ async function deleteFloor(){
 
 // Copy only the SHAPES (points, name, labelOffset) of current floor's areas
 // to chosen target floors. Progress data (dates/%/na) is NOT copied.
+// =========================================================================
+// COPY-FROM-TEMPLATE (v44)
+// Use one set-up floor as the template for many. B14 floors share ~80-100%
+// of layout so this is the highest-ROI shortcut for setting up a building:
+// trace areas once on (say) 4F, then propagate the shapes — with auto-
+// renamed apartment prefixes — to every other floor in one step.
+// =========================================================================
 function copyAreasToFloors(){
   const src = currentFloor();
   if(!src) return;
   if(src.areas.length === 0){ alert('This floor has no areas to copy.'); return; }
-  const targets = STATE.floors.filter(f => f.id !== src.id);
-  if(targets.length === 0){ alert('Add more floors first, then copy.'); return; }
+  const existing = STATE.floors.filter(f => f.id !== src.id);
 
-  // Simple multi-select via prompt of indices
-  const list = targets.map((f, i) => `${i+1}. ${f.name}`).join('\n');
+  // Step 1: choose targets. Three syntaxes supported:
+  //   1,2,3      → existing floors by number from the list
+  //   all        → every existing floor (other than source)
+  //   new: 5F,6F → create new floors with those names
+  //   new: 5F-24F → range; creates 5F, 6F, …, 24F (digits incremented, suffix preserved)
+  //   new: 5-24F  → also accepted (number range with shared suffix)
+  const listTxt = existing.length
+    ? existing.map((f, i) => `${i+1}. ${f.name}`).join('\n')
+    : '(no existing floors yet — use "new:" syntax)';
   const ans = prompt(
-    `Copy ${src.areas.length} area shape(s) from "${src.name}" to which floors?\n\n${list}\n\nEnter numbers separated by commas (e.g. 1,2,3), or "all":`,
-    'all'
+    `Copy ${src.areas.length} area shape(s) from "${src.name}" to which floors?\n\n` +
+    `EXISTING:\n${listTxt}\n\n` +
+    `Enter numbers (1,2,3) or "all", OR\n` +
+    `Create new floors with "new: 5F,6F,7F" or "new: 5F-24F" (range).`,
+    existing.length ? 'all' : 'new: 5F-24F'
   );
   if(ans === null) return;
 
-  let chosen;
-  if(ans.trim().toLowerCase() === 'all'){
-    chosen = targets;
+  let chosen = [];
+  let createdLabels = [];
+  const trimmed = ans.trim();
+  if(/^new:/i.test(trimmed)){
+    // Auto-create the named floors.
+    const namesPart = trimmed.replace(/^new:/i, '').trim();
+    const names = expandFloorNames(namesPart);
+    if(names.length === 0){ alert('Could not parse any floor names from: ' + namesPart); return; }
+    names.forEach(nm => {
+      // If a floor with this exact name already exists, reuse it (no dup).
+      let f = STATE.floors.find(x => x.name === nm);
+      if(!f){
+        f = makeFloor(nm, src.image);
+        f.imgW = src.imgW; f.imgH = src.imgH;
+        STATE.floors.push(f);
+        createdLabels.push(nm);
+      }
+      chosen.push(f);
+    });
+  } else if(trimmed.toLowerCase() === 'all'){
+    chosen = existing;
   } else {
-    const nums = ans.split(',').map(s => parseInt(s.trim(),10)).filter(n => !isNaN(n));
-    chosen = nums.map(n => targets[n-1]).filter(Boolean);
+    const nums = trimmed.split(',').map(s => parseInt(s.trim(),10)).filter(n => !isNaN(n));
+    chosen = nums.map(n => existing[n-1]).filter(Boolean);
   }
-  if(chosen.length === 0){ alert('No valid floors selected.'); return; }
+  if(chosen.length === 0){ alert('No valid target floors.'); return; }
 
-  const replace = confirm(
-    'OK = REPLACE existing areas on target floors with these shapes.\n' +
-    'Cancel = ADD these shapes alongside existing areas.'
+  // Step 2: optional area-name rename pattern.
+  const renameRaw = prompt(
+    'Rename area names by pattern? (leave empty to keep names same)\n\n' +
+    'Format:  FIND → REPLACE\n' +
+    'Use {N} for the target floor number (extracted from floor name).\n' +
+    'Use {NN} for zero-padded 2-digit number.\n\n' +
+    'Examples:\n' +
+    '  A04 → A{NN}        A04.01-LIVING  becomes  A05.01-LIVING on 5F\n' +
+    '  04. → {NN}.        same as above, shorter find\n' +
+    '  A4. → A{N}.        A4.01 → A5.01 (no padding)',
+    ''
   );
+  if(renameRaw === null) return;
+  const rename = parseRenamePattern(renameRaw);
 
+  // Step 3: replace vs add. Only ask for existing floors that already have areas.
+  const targetsWithAreas = chosen.filter(f => (f.areas||[]).length > 0);
+  let replace = false;
+  if(targetsWithAreas.length > 0){
+    replace = confirm(
+      `${targetsWithAreas.length} target floor(s) already have areas.\n\n` +
+      'OK = REPLACE existing areas with these shapes.\n' +
+      'Cancel = ADD these shapes alongside existing areas.'
+    );
+  } else {
+    // Floors are empty (likely just-created) → safe to replace (== add)
+    replace = true;
+  }
+
+  let totalAreas = 0;
   chosen.forEach(tf => {
+    const floorNum = extractFloorNumber(tf.name);
     const shapes = src.areas.map(a => {
       const na = makeBlankAreaFrom(a);
+      if(rename && floorNum != null){
+        na.name = applyRename(na.name, rename, floorNum);
+      }
       return na;
     });
     if(replace) tf.areas = shapes;
     else tf.areas = tf.areas.concat(shapes);
+    totalAreas += shapes.length;
   });
 
   renderFloorSelect();
   render();
-  alert(`Copied ${src.areas.length} shape(s) to ${chosen.length} floor(s).`);
+  alert(
+    `Done.\n` +
+    `• Floors created: ${createdLabels.length}${createdLabels.length ? ' (' + createdLabels.join(', ') + ')' : ''}\n` +
+    `• Floors updated: ${chosen.length}\n` +
+    `• Total areas copied: ${totalAreas}` +
+    (rename ? '\n• Rename applied: ' + rename.find + ' → ' + rename.replace : '')
+  );
+}
+
+// ---- Helpers for Copy-From-Template ----
+
+// Expands a comma-separated floor-name spec into an actual list. Supports
+// individual names ("5F,6F,7F") and numeric ranges ("5F-24F", "5-24F").
+function expandFloorNames(raw){
+  const out = [];
+  raw.split(',').map(s => s.trim()).filter(Boolean).forEach(token => {
+    // Try to interpret "5F-24F" or "5-24F" as a range.
+    const rangeMatch = token.match(/^(\d+)(\D*)-(\d+)(\D*)$/);
+    if(rangeMatch){
+      const startN = parseInt(rangeMatch[1],10);
+      const startSuf = rangeMatch[2];
+      const endN = parseInt(rangeMatch[3],10);
+      const endSuf = rangeMatch[4] || startSuf;  // "5-24F" → suffix "F"
+      const suffix = endSuf || startSuf;
+      const [lo, hi] = startN <= endN ? [startN, endN] : [endN, startN];
+      for(let n = lo; n <= hi; n++){
+        out.push(n + suffix);
+      }
+    } else {
+      out.push(token);
+    }
+  });
+  return out;
+}
+
+function parseRenamePattern(raw){
+  if(!raw || !raw.trim()) return null;
+  // Accept "A04 → A{N}" or "A04 -> A{N}"
+  const parts = raw.split(/\s*(?:→|->)\s*/);
+  if(parts.length !== 2 || !parts[0]) return null;
+  return { find: parts[0], replace: parts[1] };
+}
+
+// Pull the first integer out of a floor name. "5F" → 5; "Floor 10" → 10;
+// "B-21" → 21. Returns null if no digits.
+function extractFloorNumber(floorName){
+  const m = (floorName||'').match(/\d+/);
+  return m ? parseInt(m[0], 10) : null;
+}
+
+// Replace every occurrence of `pattern.find` in `areaName` with `pattern.replace`,
+// substituting {N} → floorNum and {NN} → zero-padded 2-digit floorNum first.
+function applyRename(areaName, pattern, floorNum){
+  const replacement = pattern.replace
+    .replace(/\{NN\}/g, String(floorNum).padStart(2, '0'))
+    .replace(/\{N\}/g, String(floorNum));
+  return (areaName||'').split(pattern.find).join(replacement);
 }
 
 // Remove every floor that has zero areas (junk floors). Also deletes them from
@@ -7405,7 +7535,13 @@ function exportExcel(){
     return w;
   };
 
-  // ============= ALL sheet =============
+  // === CORRIDOR DETECTION (v45) ===
+  // Areas whose name contains "CORRIDOR" (case-insensitive) live in their own
+  // dedicated sheet. They're omitted from the ALL and per-floor sheets so the
+  // user can review building progress and corridor progress separately.
+  const isCorridor = (name) => /corridor/i.test(name || '');
+
+  // ============= ALL sheet (corridor areas filtered out) =============
   // Drop Floor ID and Area ID — match areas by Floor name + Area Name.
   const allBase = ['No.', 'Floor', 'Area Name'];
   const allRow0 = [...allBase.map(()=>''), ...TASKS.flatMap(t => [t.name, ...Array(colsPerTrade-1).fill('')])];
@@ -7415,6 +7551,7 @@ function exportExcel(){
   const allData = [];
   let counter = 1;
   STATE.floors.forEach(f => (f.areas||[]).forEach(a => {
+    if(isCorridor(a.name)) return;   // corridor → dedicated sheet below
     allData.push(buildDataRow([counter++, f.name, a.name], a));
   }));
   const wsAll = XLSX.utils.aoa_to_sheet([allRow0, allRow1, allRow2, ...allData]);
@@ -7427,14 +7564,36 @@ function exportExcel(){
   ];
   XLSX.utils.book_append_sheet(wb, wsAll, 'ALL');
 
-  // ============= Per-floor sheets =============
+  // ============= CORRIDOR sheet (v45) =============
+  // Single sheet across all floors, only corridor areas. Mirrors the ALL
+  // sheet's column structure so the user can view/edit identically.
+  const corridorData = [];
+  let cCounter = 1;
+  STATE.floors.forEach(f => (f.areas||[]).forEach(a => {
+    if(!isCorridor(a.name)) return;
+    corridorData.push(buildDataRow([cCounter++, f.name, a.name], a));
+  }));
+  if(corridorData.length > 0){
+    const wsC = XLSX.utils.aoa_to_sheet([allRow0, allRow1, allRow2, ...corridorData]);
+    wsC['!merges'] = buildMerges(allBase.length);
+    applyFormats(wsC, allBase.length, 3, corridorData.length);
+    wsC['!views'] = [{ state: 'frozen', xSplit: allBase.length, ySplit: 3 }];
+    wsC['!cols'] = [
+      {wch:5}, {wch:10}, {wch:26},
+      ...TASKS.flatMap(() => colWidthsForTrade()),
+    ];
+    XLSX.utils.book_append_sheet(wb, wsC, 'CORRIDOR');
+  }
+
+  // ============= Per-floor sheets (corridor areas filtered out) =============
   STATE.floors.forEach(f => {
-    if((f.areas||[]).length === 0) return;
+    const nonCorridor = (f.areas||[]).filter(a => !isCorridor(a.name));
+    if(nonCorridor.length === 0) return;   // skip floor if it has only corridors (or is empty)
     const fBase = ['No.', 'Area Name'];
     const fRow0 = [...fBase.map(()=>''), ...TASKS.flatMap(t => [t.name, ...Array(colsPerTrade-1).fill('')])];
     const fRow1 = [...fBase.map(()=>''), ...TASKS.flatMap(() => subgroupRowCells)];
     const fRow2 = [...fBase, ...TASKS.flatMap(t => detailBase.map(c => `${t.short} ${c}`))];
-    const fData = (f.areas||[]).map((a, i) => buildDataRow([i+1, a.name], a));
+    const fData = nonCorridor.map((a, i) => buildDataRow([i+1, a.name], a));
     const ws = XLSX.utils.aoa_to_sheet([fRow0, fRow1, fRow2, ...fData]);
     ws['!merges'] = buildMerges(fBase.length);
     applyFormats(ws, fBase.length, 3, fData.length);
@@ -7783,8 +7942,8 @@ function importExcel(e){
       const areaKey = (floor, area) => floor.id + '|' + area.id;
       wb.SheetNames.forEach(sn => {
         // Skip special sheets: ALL handled below, Plan History handled before,
-        // Initial Plan handled last.
-        if(sn === 'ALL' || sn === 'Plan History' || sn === 'Initial Plan') return;
+        // Initial Plan handled last, CORRIDOR handled cross-floor below.
+        if(sn === 'ALL' || sn === 'Plan History' || sn === 'Initial Plan' || sn === 'CORRIDOR') return;
         const sheetFloor = floorByName[sn];
         if(!sheetFloor) return;   // sheet doesn't map to a known floor; skip
         const ws = wb.Sheets[sn];
@@ -7832,6 +7991,21 @@ function importExcel(e){
           const hit = findAreaForRow(row, null);
           if(!hit){ notFound++; return; }
           if(appliedAreas.has(areaKey(hit.floor, hit.area))) return;  // already applied
+          applyRowToArea(row, hit.area, hit.floor);
+          updated++;
+        });
+      }
+
+      // ===== CORRIDOR sheet (v45) =====
+      // Same shape as ALL but only contains corridor areas. Identical lookup
+      // strategy (Floor name + Area Name across all floors).
+      if(wb.SheetNames.includes('CORRIDOR')){
+        const ws = wb.Sheets['CORRIDOR'];
+        const rows = readSheet(ws);
+        rows.forEach(row => {
+          const hit = findAreaForRow(row, null);
+          if(!hit){ notFound++; return; }
+          if(appliedAreas.has(areaKey(hit.floor, hit.area))) return;
           applyRowToArea(row, hit.area, hit.floor);
           updated++;
         });
@@ -8175,7 +8349,8 @@ async function doCloudSave(){
 
     // /meta — only when its data actually changed
     if(metaDirty){
-      await setDoc(doc(db,'projects', CLOUD.PROJECT_ID,'meta','main'), buildMetaDoc());
+      const metaDoc = buildMetaDoc();
+await setDoc(doc(db,'projects', CLOUD.PROJECT_ID,'meta','main'), metaDoc);
       CLOUD.lastMetaSig = mSig;
     }
     // /cdtPlan/<floor>
@@ -8201,7 +8376,7 @@ async function doCloudSave(){
       if(!hasAreas || hasAnyCdtData){
         const cdtDoc = buildCdtPlanDoc(cf);
         CLOUD.pendingCdtEchoes.add(cdtDoc.updatedAt);
-        await setDoc(doc(db,'projects', CLOUD.PROJECT_ID,'cdtPlan', cf.id), cdtDoc);
+await setDoc(doc(db,'projects', CLOUD.PROJECT_ID,'cdtPlan', cf.id), cdtDoc);
         CLOUD.lastCdtSig[cf.id] = cSig;
       } else {
         console.warn('[SAFETY] Skipped /cdtPlan save: all CDT data empty for floor', cf.id, cf.name);
@@ -8211,7 +8386,7 @@ async function doCloudSave(){
     if(floorDirty){
       const floorDoc = buildFloorDoc(cf);
       CLOUD.pendingFloorEchoes.add(floorDoc.updatedAt);
-      await setDoc(doc(db,'projects', CLOUD.PROJECT_ID,'floors', cf.id), floorDoc, {merge:true});
+await setDoc(doc(db,'projects', CLOUD.PROJECT_ID,'floors', cf.id), floorDoc, {merge:true});
       CLOUD.lastFloorImageHash[cf.id] = strHash(cf.image||'');
       CLOUD.lastFloorSig[cf.id] = fSig;
     }
@@ -8563,7 +8738,7 @@ async function cloudLoadAndSubscribe(){
           snap.docChanges().forEach(ch => {
             if(ch.type === 'modified' || ch.type === 'added'){
               const data = ch.doc.data();
-              // === ECHO GUARD (v40) === skip our own writes — see applyRemoteFloor.
+// === ECHO GUARD (v40) === skip our own writes — see applyRemoteFloor.
               if(data && data.updatedAt && CLOUD.pendingCdtEchoes.has(data.updatedAt)){
                 CLOUD.pendingCdtEchoes.delete(data.updatedAt);
                 return;
