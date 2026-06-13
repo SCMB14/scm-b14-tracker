@@ -5813,6 +5813,19 @@ function renderCompareStats(){
   `).join('');
 }
 
+// === LABEL TEXT MEASURER (v44 iter 3) ===
+// Canvas.measureText gives PIXEL-EXACT text width — much better than the
+// char-count × ratio estimate which only works for monospace fonts. With
+// Arial (proportional), characters vary 5-15px wide, so a flat ratio
+// over-estimates short labels (lowercase "i", digits "1") and under-
+// estimates wide labels ("M", "W"). Cached canvas reused across all calls.
+const __measureCanvas = document.createElement('canvas');
+const __measureCtx = __measureCanvas.getContext('2d');
+function measureLabelText(text, fontSize, fontWeight){
+  __measureCtx.font = `${fontWeight||400} ${fontSize}px Arial, sans-serif`;
+  return __measureCtx.measureText(text || '').width;
+}
+
 function renderExternalLabel(area, statusColor){
   const bounds = polyBounds(area.points);
   const centroid = polyCentroid(area.points);
@@ -5830,17 +5843,14 @@ function renderExternalLabel(area, statusColor){
     if(td && td.na) return;
   }
 
-  // === DYNAMIC LABEL WIDTH (v44) ===
-  // Pre-build every visible string and estimate its width so the box fits
-  // content exactly — no wasted right-edge whitespace for short names like
-  // "A05.01", no clipping for long ones like "A05.CORRIDOR".
-  // v44 iter 2: switched to Arial (more readable than JetBrains Mono at this
-  // size). Arial is PROPORTIONAL not monospace, so widths vary per character.
-  // Empirically Arial averages ~0.55 × fontSize per char for mixed content;
-  // we use 0.6 to overestimate slightly (oversized box > clipped text).
-  const CHAR_RATIO = 0.6;
+  // === DYNAMIC LABEL WIDTH (v44 iter 3) ===
+  // Pre-build every visible string and MEASURE its width with the canvas
+  // measurer so the box fits content exactly. The earlier char-ratio
+  // estimate (0.6 × fontSize × length) was monospace-friendly but
+  // over-estimated Arial since proportional fonts vary 5-15px per char.
+  // Each label now sizes precisely to its content.
   const FONT = { name: 20, info: 17, allCode: 14, allInfo: 14, allStatus: 12 };
-  // widths[i] = pixel width that line i's text content needs (excluding box padding)
+  // widths[i] = exact pixel width that line i's text content needs
   const widths = [];
 
   // --- Name line ---
@@ -5848,7 +5858,7 @@ function renderExternalLabel(area, statusColor){
     const nameText = (isAllView || !STATE.toggles.showTradeCode)
       ? area.name
       : `${area.name} · ${TASK_BY_KEY[STATE.currentTask].short}`;
-    widths.push(nameText.length * FONT.name * CHAR_RATIO);
+    widths.push(measureLabelText(nameText, FONT.name, 700));
   }
 
   // --- Data lines ---
@@ -5870,9 +5880,9 @@ function renderExternalLabel(area, statusColor){
       const statusStr = STATE.toggles.showStatus ? ts.label.toUpperCase() : '';
       // Layout: 10 (dot+gap) + code + info + gap + status. Numbers match
       // the existing per-trade row rendering further down.
-      const codeW = codeStr ? codeStr.length * FONT.allCode * CHAR_RATIO + 4 : 0;
-      const infoW = infoStr.length * FONT.allInfo * CHAR_RATIO;
-      const statusW = statusStr ? statusStr.length * FONT.allStatus * CHAR_RATIO + 6 : 0;
+      const codeW = codeStr ? measureLabelText(codeStr, FONT.allCode, 700) + 4 : 0;
+      const infoW = measureLabelText(infoStr, FONT.allInfo);
+      const statusW = statusStr ? measureLabelText(statusStr, FONT.allStatus, 700) + 6 : 0;
       widths.push(10 + codeW + infoW + statusW);
     });
   } else {
@@ -5882,21 +5892,21 @@ function renderExternalLabel(area, statusColor){
       const s = taskPlanStart(td) && taskPlanEnd(td)
         ? `Plan: ${fmtDate(taskPlanStart(td))} → ${fmtDate(taskPlanEnd(td))}`
         : 'Plan: —';
-      widths.push(s.length * FONT.info * CHAR_RATIO);
+      widths.push(measureLabelText(s, FONT.info));
     }
     if(STATE.toggles.showActual){
       const s = (td.actualStart || td.actualEnd)
         ? `Actual: ${fmtDate(td.actualStart)} → ${fmtDate(td.actualEnd)}`
         : 'Actual: —';
-      widths.push(s.length * FONT.info * CHAR_RATIO);
+      widths.push(measureLabelText(s, FONT.info));
     }
     if(STATE.toggles.showPct){
       const s = `Plan: ${Math.round(calcPlanPercent(td))}%  Actual: ${Math.round(Number(td.percentActual)||0)}%`;
-      widths.push(s.length * FONT.info * CHAR_RATIO);
+      widths.push(measureLabelText(s, FONT.info));
     }
     if(STATE.toggles.showStatus){
       const s = '[ ' + ts.label.toUpperCase() + ' ]';
-      widths.push(s.length * FONT.info * CHAR_RATIO);
+      widths.push(measureLabelText(s, FONT.info, 700));
     }
   }
 
@@ -5905,10 +5915,12 @@ function renderExternalLabel(area, statusColor){
 
   // Box geometry. padding 10 → 6 (less whitespace), lineH bumped to fit
   // bigger fonts (name 20, info 17). labelW grows to the widest line.
+  // Min 50 prevents super-tiny boxes for empty labels; canvas measurement
+  // now provides exact widths so no over-estimate "safety" floor needed.
   const lineH = isAllView ? 19 : 22;
   const padding = 6;
   const maxW = Math.max(...widths);
-  const labelW = Math.max(80, Math.ceil(maxW + padding * 2));
+  const labelW = Math.max(50, Math.ceil(maxW + padding * 2));
   const labelH = lineCount * lineH + padding;
 
   // Base (auto) position to the right of the polygon
