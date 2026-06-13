@@ -1760,7 +1760,7 @@
   <button class="quick-entry-btn" id="quickEntryBtn" title="Quick Entry — fast per-unit progress input" aria-label="Quick Entry">⚡</button>
   <div class="logo">SCM<span>·B14</span> PROGRESS</div>
   <div class="subtitle">Multi-Task<br>Construction Tracker</div>
-  <div style="font-size:11px;color:#000;background:var(--green);padding:3px 10px;border-radius:12px;font-weight:700;font-family:var(--font-mono)">v43</div>
+  <div style="font-size:11px;color:#000;background:var(--green);padding:3px 10px;border-radius:12px;font-weight:700;font-family:var(--font-mono)">v44</div>
   <div class="toolbar">
     <button class="btn" id="loadImageBtn" title="Load floor plan (image or PDF) for the current floor">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg>
@@ -5812,6 +5812,19 @@ function renderCompareStats(){
   `).join('');
 }
 
+// === LABEL TEXT MEASURER (v44 iter 3) ===
+// Canvas.measureText gives PIXEL-EXACT text width — much better than the
+// char-count × ratio estimate which only works for monospace fonts. With
+// Arial (proportional), characters vary 5-15px wide, so a flat ratio
+// over-estimates short labels (lowercase "i", digits "1") and under-
+// estimates wide labels ("M", "W"). Cached canvas reused across all calls.
+const __measureCanvas = document.createElement('canvas');
+const __measureCtx = __measureCanvas.getContext('2d');
+function measureLabelText(text, fontSize, fontWeight){
+  __measureCtx.font = `${fontWeight||400} ${fontSize}px Arial, sans-serif`;
+  return __measureCtx.measureText(text || '').width;
+}
+
 function renderExternalLabel(area, statusColor){
   const bounds = polyBounds(area.points);
   const centroid = polyCentroid(area.points);
@@ -5829,25 +5842,84 @@ function renderExternalLabel(area, statusColor){
     if(td && td.na) return;
   }
 
-  // Count visible lines
-  let lineCount = 0;
-  if(STATE.toggles.showName) lineCount++;
-  if(isAllView){
-    if(STATE.toggles.showDates || STATE.toggles.showPct || STATE.toggles.showStatus){
-      // Only count non-N/A trades (N/A lines are skipped below)
-      lineCount += TASKS.filter(t => !area.tasks[t.key].na).length;
-    }
-  } else {
-    if(STATE.toggles.showDates) lineCount++;
-    if(STATE.toggles.showActual) lineCount++;
-    if(STATE.toggles.showPct) lineCount++;
-    if(STATE.toggles.showStatus) lineCount++;
+  // === DYNAMIC LABEL WIDTH (v44 iter 3) ===
+  // Pre-build every visible string and MEASURE its width with the canvas
+  // measurer so the box fits content exactly. The earlier char-ratio
+  // estimate (0.6 × fontSize × length) was monospace-friendly but
+  // over-estimated Arial since proportional fonts vary 5-15px per char.
+  // Each label now sizes precisely to its content.
+  const FONT = { name: 20, info: 17, allCode: 14, allInfo: 14, allStatus: 12 };
+  // widths[i] = exact pixel width that line i's text content needs
+  const widths = [];
+
+  // --- Name line ---
+  if(STATE.toggles.showName){
+    const nameText = (isAllView || !STATE.toggles.showTradeCode)
+      ? area.name
+      : `${area.name} · ${TASK_BY_KEY[STATE.currentTask].short}`;
+    widths.push(measureLabelText(nameText, FONT.name, 700));
   }
+
+  // --- Data lines ---
+  if(isAllView){
+    TASKS.forEach(taskDef => {
+      const td = area.tasks[taskDef.key];
+      if(td.na) return;
+      const ts = calcTaskStatus(td);
+      const planPct = Math.round(calcPlanPercent(td));
+      const actPct = Math.round(Number(td.percentActual)||0);
+      const parts = [];
+      if(STATE.toggles.showDates) parts.push(`P:${fmtDate(taskPlanStart(td))}→${fmtDate(taskPlanEnd(td))}`);
+      if(STATE.toggles.showActual){
+        if(td.actualStart || td.actualEnd) parts.push(`A:${fmtDate(td.actualStart)}→${fmtDate(td.actualEnd)}`);
+      }
+      if(STATE.toggles.showPct) parts.push(`P${planPct}% A${actPct}%`);
+      const infoStr = parts.join('  ');
+      const codeStr = (STATE.toggles.showTradeCode !== false) ? taskDef.short : '';
+      const statusStr = STATE.toggles.showStatus ? ts.label.toUpperCase() : '';
+      // Layout: 10 (dot+gap) + code + info + gap + status. Numbers match
+      // the existing per-trade row rendering further down.
+      const codeW = codeStr ? measureLabelText(codeStr, FONT.allCode, 700) + 4 : 0;
+      const infoW = measureLabelText(infoStr, FONT.allInfo);
+      const statusW = statusStr ? measureLabelText(statusStr, FONT.allStatus, 700) + 6 : 0;
+      widths.push(10 + codeW + infoW + statusW);
+    });
+  } else {
+    const td = area.tasks[STATE.currentTask];
+    const ts = calcTaskStatus(td);
+    if(STATE.toggles.showDates){
+      const s = taskPlanStart(td) && taskPlanEnd(td)
+        ? `Plan: ${fmtDate(taskPlanStart(td))} → ${fmtDate(taskPlanEnd(td))}`
+        : 'Plan: —';
+      widths.push(measureLabelText(s, FONT.info));
+    }
+    if(STATE.toggles.showActual){
+      const s = (td.actualStart || td.actualEnd)
+        ? `Actual: ${fmtDate(td.actualStart)} → ${fmtDate(td.actualEnd)}`
+        : 'Actual: —';
+      widths.push(measureLabelText(s, FONT.info));
+    }
+    if(STATE.toggles.showPct){
+      const s = `Plan: ${Math.round(calcPlanPercent(td))}%  Actual: ${Math.round(Number(td.percentActual)||0)}%`;
+      widths.push(measureLabelText(s, FONT.info));
+    }
+    if(STATE.toggles.showStatus){
+      const s = '[ ' + ts.label.toUpperCase() + ' ]';
+      widths.push(measureLabelText(s, FONT.info, 700));
+    }
+  }
+
+  const lineCount = widths.length;
   if(lineCount === 0) return;
 
-  const lineH = isAllView ? 12 : 14;
-  const padding = 10;
-  const labelW = isAllView ? 210 : 185;
+  // Box geometry. padding 10 → 6 (less whitespace), lineH bumped to fit
+  // bigger fonts (name 20, info 17). labelW grows to the widest line.
+  // Min 50 prevents super-tiny boxes for empty labels; canvas measurement
+  // now provides exact widths so no over-estimate "safety" floor needed.
+  const lineH = isAllView ? 19 : 22;
+  const padding = 6;
+  const maxW = Math.max(...widths);
+  const labelW = Math.max(50, Math.ceil(maxW + padding * 2));
   const labelH = lineCount * lineH + padding;
 
   // Base (auto) position to the right of the polygon
@@ -5890,7 +5962,7 @@ function renderExternalLabel(area, statusColor){
     svgLayer.appendChild(line);
   }
 
-  // White background, status-colored border
+  // White background, status-colored border (v44: stroke 2 → 1 = lighter look)
   const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
   bg.setAttribute('x', labelX);
   bg.setAttribute('y', labelY - labelH/2);
@@ -5899,12 +5971,13 @@ function renderExternalLabel(area, statusColor){
   bg.setAttribute('rx', '3');
   bg.setAttribute('fill', '#ffffff');
   bg.setAttribute('stroke', statusColor);
-  bg.setAttribute('stroke-width', '2');
+  bg.setAttribute('stroke-width', '1');
   g.appendChild(bg);
 
-  // small drag handle indicator (top-left corner dot)
+  // small drag handle indicator — top-RIGHT corner (v44) so it doesn't sit
+  // on top of the now-left-aligned text in the top-left of the label.
   const handle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-  handle.setAttribute('cx', labelX + 6);
+  handle.setAttribute('cx', labelX + labelW - 6);
   handle.setAttribute('cy', labelY - labelH/2 + 6);
   handle.setAttribute('r', 2.5);
   handle.setAttribute('fill', statusColor);
@@ -5913,6 +5986,8 @@ function renderExternalLabel(area, statusColor){
 
   let yCursor = labelY - labelH/2 + padding/2 + lineH/2;
   const cx = labelX + labelW/2;
+  // v44: left-edge anchor. +3 keeps a tiny gap from the border.
+  const leftX = labelX + 3;
 
   function mkText(x, y, anchor='middle'){
     const t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
@@ -5920,21 +5995,18 @@ function renderExternalLabel(area, statusColor){
     t.setAttribute('y', y);
     t.setAttribute('text-anchor', anchor);
     t.setAttribute('dominant-baseline', 'central');
-    t.style.fontFamily = "'JetBrains Mono', monospace";
+    t.style.fontFamily = "Arial, sans-serif";   // v44 iter 2: Mono → Arial
     t.style.pointerEvents = 'none';
     t.style.userSelect = 'none';
     return t;
   }
 
-  // Name line (black text)
+  // Name line (black text) — v44: left-aligned, font 11 → 16
   if(STATE.toggles.showName){
-    const t = mkText(cx, yCursor);
-    t.style.fontSize = '11px';
+    const t = mkText(leftX, yCursor, 'start');
+    t.style.fontSize = '20px';
     t.style.fontWeight = '700';
     t.setAttribute('fill', '#111111');
-    // In single-task view we normally append the trade short code (e.g. "· TI")
-    // to make it clear which trade the dates/% below refer to. The user can
-    // toggle this suffix off via the "Show trade code" switch in Display Options.
     if(isAllView || !STATE.toggles.showTradeCode){
       t.textContent = area.name;
     } else {
@@ -5968,7 +6040,7 @@ function renderExternalLabel(area, statusColor){
       let infoLeft = labelX + 17;
       if(showCode){
         const lbl = mkText(labelX + 17, yCursor, 'start');
-        lbl.style.fontSize = '9px';
+        lbl.style.fontSize = '14px';   // v44: 9 → 12
         lbl.style.fontWeight = '700';
         lbl.setAttribute('fill', '#111111');
         lbl.textContent = taskDef.short;
@@ -5985,7 +6057,7 @@ function renderExternalLabel(area, statusColor){
       }
       if(STATE.toggles.showPct) parts.push(`P${planPct}% A${actPct}%`);
       const info = mkText(infoLeft, yCursor, 'start');
-      info.style.fontSize = '8.5px';
+      info.style.fontSize = '14px';   // v44: 8.5 → 12
       info.setAttribute('fill', '#333333');
       info.textContent = parts.join('  ');
       g.appendChild(info);
@@ -5993,7 +6065,7 @@ function renderExternalLabel(area, statusColor){
       // status (colored)
       if(STATE.toggles.showStatus){
         const sb = mkText(labelX + labelW - 6, yCursor, 'end');
-        sb.style.fontSize = '8px';
+        sb.style.fontSize = '12px';   // v44: 8 → 10
         sb.style.fontWeight = '700';
         sb.setAttribute('fill', ts.color);
         sb.textContent = ts.label.toUpperCase();
@@ -6006,8 +6078,8 @@ function renderExternalLabel(area, statusColor){
     const ts = calcTaskStatus(taskData);
 
     if(STATE.toggles.showDates){
-      const t = mkText(cx, yCursor);
-      t.style.fontSize = '9.5px';
+      const t = mkText(leftX, yCursor, 'start');
+      t.style.fontSize = '17px';
       t.setAttribute('fill', '#111111');
       const s = taskPlanStart(taskData) && taskPlanEnd(taskData)
         ? `Plan: ${fmtDate(taskPlanStart(taskData))} → ${fmtDate(taskPlanEnd(taskData))}`
@@ -6018,8 +6090,8 @@ function renderExternalLabel(area, statusColor){
     }
 
     if(STATE.toggles.showActual){
-      const t = mkText(cx, yCursor);
-      t.style.fontSize = '9.5px';
+      const t = mkText(leftX, yCursor, 'start');
+      t.style.fontSize = '17px';
       t.setAttribute('fill', '#444444');
       const s = (taskData.actualStart || taskData.actualEnd)
         ? `Actual: ${fmtDate(taskData.actualStart)} → ${fmtDate(taskData.actualEnd)}`
@@ -6030,8 +6102,8 @@ function renderExternalLabel(area, statusColor){
     }
 
     if(STATE.toggles.showPct){
-      const t = mkText(cx, yCursor);
-      t.style.fontSize = '9.5px';
+      const t = mkText(leftX, yCursor, 'start');
+      t.style.fontSize = '17px';
       t.setAttribute('fill', '#333333');
       t.textContent = `Plan: ${Math.round(calcPlanPercent(taskData))}%  Actual: ${Math.round(Number(taskData.percentActual)||0)}%`;
       g.appendChild(t);
@@ -6039,8 +6111,8 @@ function renderExternalLabel(area, statusColor){
     }
 
     if(STATE.toggles.showStatus){
-      const t = mkText(cx, yCursor);
-      t.style.fontSize = '10px';
+      const t = mkText(leftX, yCursor, 'start');
+      t.style.fontSize = '17px';
       t.style.fontWeight = '700';
       t.setAttribute('fill', ts.color);
       t.textContent = '[ ' + ts.label.toUpperCase() + ' ]';
