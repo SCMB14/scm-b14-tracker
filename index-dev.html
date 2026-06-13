@@ -3386,38 +3386,6 @@ function exportFloorPNG(){
   const h = STATE.imgH || floorImg.naturalHeight;
   if(!w || !h){ alert('No plan image loaded for this floor.'); return; }
 
-  // === PNG EXPORT LABEL SCALE (v44) ===
-  // PowerPoint slides typically downscale a pasted floor-plan PNG to ~25-30%
-  // of original (full-slide width ~1000px from a 4000px export). At that scale
-  // the user's on-screen label size becomes unreadable. We temporarily force
-  // a large effective scale (labelScale=3, zoom=1 → effective=3) only for the
-  // export render, then restore the on-screen state before exiting.
-  // User can override the default via prompt — '3' suits most PPT slides;
-  // larger (4-5) for projector presentations, smaller (1.5-2) for full-page.
-  const exportScaleRaw = prompt(
-    'Label size for PNG export\n\n' +
-    '  1 = on-screen size (tiny in slides)\n' +
-    '  2 = readable in full-page PowerPoint\n' +
-    '  3 = readable in standard slide (recommended)\n' +
-    '  5 = very large, projector-friendly',
-    '3'
-  );
-  if(exportScaleRaw === null) return;   // user cancelled
-  const exportScale = Math.max(0.5, Math.min(10, parseFloat(exportScaleRaw) || 3));
-
-  const savedLabelScale = STATE.labelScale;
-  const savedZoom = STATE.zoom;
-  STATE.labelScale = exportScale;
-  STATE.zoom = 1;        // so effective = labelScale/zoom = exportScale exactly
-  renderCanvasOnly();    // rebuild SVG with the export-sized labels
-
-  // Helper to restore state after either success or failure paths.
-  const restoreOnScreenState = () => {
-    STATE.labelScale = savedLabelScale;
-    STATE.zoom = savedZoom;
-    renderCanvasOnly();
-  };
-
   const canvas = document.createElement('canvas');
   canvas.width = w; canvas.height = h;
   const ctx = canvas.getContext('2d');
@@ -3456,13 +3424,11 @@ function exportFloorPNG(){
       a.href = URL.createObjectURL(blob);
       a.download = `SCM-B14-${cf.name.replace(/[^\w]+/g,'-')}-plan.png`;
       a.click();
-      restoreOnScreenState();
     }, 'image/png');
   };
   img.onerror = () => {
     alert('Could not render overlay. The background image may block export (CORS). Try a locally-uploaded image.');
     URL.revokeObjectURL(url);
-    restoreOnScreenState();
   };
   img.src = url;
 }
@@ -5036,7 +5002,6 @@ function screenToImg(sx, sy){
 function setZoom(z){
   STATE.zoom = Math.max(0.1, Math.min(8, z));
   applyTransform();
-  scheduleLabelRerender();  // v44: zoom-invariant labels need re-render
 }
 function fitToScreen(){
   if(!STATE.imgW) return;
@@ -5049,22 +5014,6 @@ function fitToScreen(){
   STATE.pan.x = (r.width - STATE.imgW * z * 1.4) / 2;
   STATE.pan.y = (r.height - STATE.imgH * z) / 2;
   applyTransform();
-  scheduleLabelRerender();  // v44
-}
-
-// === ZOOM-INVARIANT LABEL RE-RENDER (v44) ===
-// Labels now scale inversely with canvas zoom so they stay constant on
-// screen. To make that work, we have to actually re-compute each label's
-// SVG transform whenever the canvas zoom changes. Wheel/pinch fires many
-// events per second so we coalesce into one re-render per animation frame.
-let __zoomRerenderPending = false;
-function scheduleLabelRerender(){
-  if(__zoomRerenderPending) return;
-  __zoomRerenderPending = true;
-  requestAnimationFrame(() => {
-    __zoomRerenderPending = false;
-    renderCanvasOnly();
-  });
 }
 
 /* =============================================================
@@ -5081,7 +5030,6 @@ function onWheel(e){
   STATE.pan.y = my - (my - STATE.pan.y) * (newZoom / oldZoom);
   STATE.zoom = newZoom;
   applyTransform();
-  scheduleLabelRerender();  // v44: zoom-invariant labels
 }
 function onMouseDown(e){
   if(e.target.closest('.zoom-controls')) return;
@@ -5882,28 +5830,83 @@ function renderExternalLabel(area, statusColor){
     if(td && td.na) return;
   }
 
-  // Count visible lines
-  let lineCount = 0;
-  if(STATE.toggles.showName) lineCount++;
-  if(isAllView){
-    if(STATE.toggles.showDates || STATE.toggles.showPct || STATE.toggles.showStatus){
-      // Only count non-N/A trades (N/A lines are skipped below)
-      lineCount += TASKS.filter(t => !area.tasks[t.key].na).length;
-    }
-  } else {
-    if(STATE.toggles.showDates) lineCount++;
-    if(STATE.toggles.showActual) lineCount++;
-    if(STATE.toggles.showPct) lineCount++;
-    if(STATE.toggles.showStatus) lineCount++;
+  // === DYNAMIC LABEL WIDTH (v44) ===
+  // Pre-build every visible string and estimate its width so the box fits
+  // content exactly — no wasted right-edge whitespace for short names like
+  // "A05.01", no clipping for long ones like "A05.CORRIDOR  P50% A30%".
+  // JetBrains Mono is uniform-width: char_width ≈ 0.6 × font_size is a tight
+  // bound that avoids a costly DOM measurement pass on every render.
+  const CHAR_RATIO = 0.6;
+  const FONT = { name: 16, info: 14, allCode: 12, allInfo: 12, allStatus: 10 };
+  // widths[i] = pixel width that line i's text content needs (excluding box padding)
+  const widths = [];
+
+  // --- Name line ---
+  if(STATE.toggles.showName){
+    const nameText = (isAllView || !STATE.toggles.showTradeCode)
+      ? area.name
+      : `${area.name} · ${TASK_BY_KEY[STATE.currentTask].short}`;
+    widths.push(nameText.length * FONT.name * CHAR_RATIO);
   }
+
+  // --- Data lines ---
+  if(isAllView){
+    TASKS.forEach(taskDef => {
+      const td = area.tasks[taskDef.key];
+      if(td.na) return;
+      const ts = calcTaskStatus(td);
+      const planPct = Math.round(calcPlanPercent(td));
+      const actPct = Math.round(Number(td.percentActual)||0);
+      const parts = [];
+      if(STATE.toggles.showDates) parts.push(`P:${fmtDate(taskPlanStart(td))}→${fmtDate(taskPlanEnd(td))}`);
+      if(STATE.toggles.showActual){
+        if(td.actualStart || td.actualEnd) parts.push(`A:${fmtDate(td.actualStart)}→${fmtDate(td.actualEnd)}`);
+      }
+      if(STATE.toggles.showPct) parts.push(`P${planPct}% A${actPct}%`);
+      const infoStr = parts.join('  ');
+      const codeStr = (STATE.toggles.showTradeCode !== false) ? taskDef.short : '';
+      const statusStr = STATE.toggles.showStatus ? ts.label.toUpperCase() : '';
+      // Layout: 10 (dot+gap) + code + info + gap + status. Numbers match
+      // the existing per-trade row rendering further down.
+      const codeW = codeStr ? codeStr.length * FONT.allCode * CHAR_RATIO + 4 : 0;
+      const infoW = infoStr.length * FONT.allInfo * CHAR_RATIO;
+      const statusW = statusStr ? statusStr.length * FONT.allStatus * CHAR_RATIO + 6 : 0;
+      widths.push(10 + codeW + infoW + statusW);
+    });
+  } else {
+    const td = area.tasks[STATE.currentTask];
+    const ts = calcTaskStatus(td);
+    if(STATE.toggles.showDates){
+      const s = taskPlanStart(td) && taskPlanEnd(td)
+        ? `Plan: ${fmtDate(taskPlanStart(td))} → ${fmtDate(taskPlanEnd(td))}`
+        : 'Plan: —';
+      widths.push(s.length * FONT.info * CHAR_RATIO);
+    }
+    if(STATE.toggles.showActual){
+      const s = (td.actualStart || td.actualEnd)
+        ? `Actual: ${fmtDate(td.actualStart)} → ${fmtDate(td.actualEnd)}`
+        : 'Actual: —';
+      widths.push(s.length * FONT.info * CHAR_RATIO);
+    }
+    if(STATE.toggles.showPct){
+      const s = `Plan: ${Math.round(calcPlanPercent(td))}%  Actual: ${Math.round(Number(td.percentActual)||0)}%`;
+      widths.push(s.length * FONT.info * CHAR_RATIO);
+    }
+    if(STATE.toggles.showStatus){
+      const s = '[ ' + ts.label.toUpperCase() + ' ]';
+      widths.push(s.length * FONT.info * CHAR_RATIO);
+    }
+  }
+
+  const lineCount = widths.length;
   if(lineCount === 0) return;
 
-  // Box dimensions (v44 iter 2): tighter padding, smaller border, right-aligned text.
-  // padding 12 → 6 freed up ~12px width that text now uses, so font can grow
-  // without making the label box bigger overall.
-  const lineH = isAllView ? 14 : 16;
+  // Box geometry. padding 10 → 6 (less whitespace), lineH bumped to fit
+  // taller fonts (name 16, info 14). labelW grows to the widest line.
+  const lineH = isAllView ? 16 : 18;
   const padding = 6;
-  const labelW = isAllView ? 240 : 215;
+  const maxW = Math.max(...widths);
+  const labelW = Math.max(80, Math.ceil(maxW + padding * 2));
   const labelH = lineCount * lineH + padding;
 
   // Base (auto) position to the right of the polygon
@@ -5926,13 +5929,7 @@ function renderExternalLabel(area, statusColor){
 
   // Apply user label-size scaling, pivoting around the label's left-middle
   // (the point the leader line connects to) so it grows outward naturally.
-  // === ZOOM-INVARIANT LABELS (v44) ===
-  // Old code: `scale(labelScale)` only. Result: when the user zoomed the
-  // canvas OUT to fit the whole floor, labels shrank with it and became
-  // unreadable. Now we divide by the canvas zoom so labels stay at a
-  // CONSTANT screen size regardless of how far you zoom in/out. labelScale
-  // becomes a pure "screen-pixel multiplier".
-  const s = (STATE.labelScale || 1) / (STATE.zoom || 1);
+  const s = STATE.labelScale || 1;
   if(s !== 1){
     g.setAttribute('transform', `translate(${labelX} ${labelY}) scale(${s}) translate(${-labelX} ${-labelY})`);
   }
@@ -5952,7 +5949,7 @@ function renderExternalLabel(area, statusColor){
     svgLayer.appendChild(line);
   }
 
-  // White background, status-colored border (v44 iter 2: stroke 2 → 1, less visual weight).
+  // White background, status-colored border (v44: stroke 2 → 1 = lighter look)
   const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
   bg.setAttribute('x', labelX);
   bg.setAttribute('y', labelY - labelH/2);
@@ -5964,8 +5961,8 @@ function renderExternalLabel(area, statusColor){
   bg.setAttribute('stroke-width', '1');
   g.appendChild(bg);
 
-  // small drag handle indicator — moved to top-right (v44 iter 2) so it
-  // doesn't sit on top of the now-left-aligned text.
+  // small drag handle indicator — top-RIGHT corner (v44) so it doesn't sit
+  // on top of the now-left-aligned text in the top-left of the label.
   const handle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
   handle.setAttribute('cx', labelX + labelW - 6);
   handle.setAttribute('cy', labelY - labelH/2 + 6);
@@ -5976,8 +5973,7 @@ function renderExternalLabel(area, statusColor){
 
   let yCursor = labelY - labelH/2 + padding/2 + lineH/2;
   const cx = labelX + labelW/2;
-  // v44 iter 2: left-edge anchor for left-aligned text. +3 keeps a tiny gap
-  // from the border so characters don't touch the stroke line.
+  // v44: left-edge anchor. +3 keeps a tiny gap from the border.
   const leftX = labelX + 3;
 
   function mkText(x, y, anchor='middle'){
@@ -5992,15 +5988,12 @@ function renderExternalLabel(area, statusColor){
     return t;
   }
 
-  // Name line (black text), left-aligned (v44 iter 2: was centered).
+  // Name line (black text) — v44: left-aligned, font 11 → 16
   if(STATE.toggles.showName){
     const t = mkText(leftX, yCursor, 'start');
-    t.style.fontSize = '16px';   // v44 iter 2: 11 → 14 → 16
+    t.style.fontSize = '16px';
     t.style.fontWeight = '700';
     t.setAttribute('fill', '#111111');
-    // In single-task view we normally append the trade short code (e.g. "· TI")
-    // to make it clear which trade the dates/% below refer to. The user can
-    // toggle this suffix off via the "Show trade code" switch in Display Options.
     if(isAllView || !STATE.toggles.showTradeCode){
       t.textContent = area.name;
     } else {
@@ -6034,7 +6027,7 @@ function renderExternalLabel(area, statusColor){
       let infoLeft = labelX + 17;
       if(showCode){
         const lbl = mkText(labelX + 17, yCursor, 'start');
-        lbl.style.fontSize = '11px';   // v44: bumped from 9
+        lbl.style.fontSize = '12px';   // v44: 9 → 12
         lbl.style.fontWeight = '700';
         lbl.setAttribute('fill', '#111111');
         lbl.textContent = taskDef.short;
@@ -6051,7 +6044,7 @@ function renderExternalLabel(area, statusColor){
       }
       if(STATE.toggles.showPct) parts.push(`P${planPct}% A${actPct}%`);
       const info = mkText(infoLeft, yCursor, 'start');
-      info.style.fontSize = '10.5px';   // v44: bumped from 8.5
+      info.style.fontSize = '12px';   // v44: 8.5 → 12
       info.setAttribute('fill', '#333333');
       info.textContent = parts.join('  ');
       g.appendChild(info);
@@ -6059,7 +6052,7 @@ function renderExternalLabel(area, statusColor){
       // status (colored)
       if(STATE.toggles.showStatus){
         const sb = mkText(labelX + labelW - 6, yCursor, 'end');
-        sb.style.fontSize = '10px';   // v44: bumped from 8
+        sb.style.fontSize = '10px';   // v44: 8 → 10
         sb.style.fontWeight = '700';
         sb.setAttribute('fill', ts.color);
         sb.textContent = ts.label.toUpperCase();
@@ -6073,7 +6066,7 @@ function renderExternalLabel(area, statusColor){
 
     if(STATE.toggles.showDates){
       const t = mkText(leftX, yCursor, 'start');
-      t.style.fontSize = '14px';   // v44 iter 2: 9.5 → 12 → 14
+      t.style.fontSize = '14px';
       t.setAttribute('fill', '#111111');
       const s = taskPlanStart(taskData) && taskPlanEnd(taskData)
         ? `Plan: ${fmtDate(taskPlanStart(taskData))} → ${fmtDate(taskPlanEnd(taskData))}`
@@ -6085,7 +6078,7 @@ function renderExternalLabel(area, statusColor){
 
     if(STATE.toggles.showActual){
       const t = mkText(leftX, yCursor, 'start');
-      t.style.fontSize = '14px';   // v44 iter 2
+      t.style.fontSize = '14px';
       t.setAttribute('fill', '#444444');
       const s = (taskData.actualStart || taskData.actualEnd)
         ? `Actual: ${fmtDate(taskData.actualStart)} → ${fmtDate(taskData.actualEnd)}`
@@ -6097,7 +6090,7 @@ function renderExternalLabel(area, statusColor){
 
     if(STATE.toggles.showPct){
       const t = mkText(leftX, yCursor, 'start');
-      t.style.fontSize = '14px';   // v44 iter 2
+      t.style.fontSize = '14px';
       t.setAttribute('fill', '#333333');
       t.textContent = `Plan: ${Math.round(calcPlanPercent(taskData))}%  Actual: ${Math.round(Number(taskData.percentActual)||0)}%`;
       g.appendChild(t);
@@ -6106,7 +6099,7 @@ function renderExternalLabel(area, statusColor){
 
     if(STATE.toggles.showStatus){
       const t = mkText(leftX, yCursor, 'start');
-      t.style.fontSize = '14px';   // v44 iter 2: 10 → 12 → 14
+      t.style.fontSize = '14px';
       t.style.fontWeight = '700';
       t.setAttribute('fill', ts.color);
       t.textContent = '[ ' + ts.label.toUpperCase() + ' ]';
