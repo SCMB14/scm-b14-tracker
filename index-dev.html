@@ -3386,6 +3386,38 @@ function exportFloorPNG(){
   const h = STATE.imgH || floorImg.naturalHeight;
   if(!w || !h){ alert('No plan image loaded for this floor.'); return; }
 
+  // === PNG EXPORT LABEL SCALE (v44) ===
+  // PowerPoint slides typically downscale a pasted floor-plan PNG to ~25-30%
+  // of original (full-slide width ~1000px from a 4000px export). At that scale
+  // the user's on-screen label size becomes unreadable. We temporarily force
+  // a large effective scale (labelScale=3, zoom=1 → effective=3) only for the
+  // export render, then restore the on-screen state before exiting.
+  // User can override the default via prompt — '3' suits most PPT slides;
+  // larger (4-5) for projector presentations, smaller (1.5-2) for full-page.
+  const exportScaleRaw = prompt(
+    'Label size for PNG export\n\n' +
+    '  1 = on-screen size (tiny in slides)\n' +
+    '  2 = readable in full-page PowerPoint\n' +
+    '  3 = readable in standard slide (recommended)\n' +
+    '  5 = very large, projector-friendly',
+    '3'
+  );
+  if(exportScaleRaw === null) return;   // user cancelled
+  const exportScale = Math.max(0.5, Math.min(10, parseFloat(exportScaleRaw) || 3));
+
+  const savedLabelScale = STATE.labelScale;
+  const savedZoom = STATE.zoom;
+  STATE.labelScale = exportScale;
+  STATE.zoom = 1;        // so effective = labelScale/zoom = exportScale exactly
+  renderCanvasOnly();    // rebuild SVG with the export-sized labels
+
+  // Helper to restore state after either success or failure paths.
+  const restoreOnScreenState = () => {
+    STATE.labelScale = savedLabelScale;
+    STATE.zoom = savedZoom;
+    renderCanvasOnly();
+  };
+
   const canvas = document.createElement('canvas');
   canvas.width = w; canvas.height = h;
   const ctx = canvas.getContext('2d');
@@ -3424,11 +3456,13 @@ function exportFloorPNG(){
       a.href = URL.createObjectURL(blob);
       a.download = `SCM-B14-${cf.name.replace(/[^\w]+/g,'-')}-plan.png`;
       a.click();
+      restoreOnScreenState();
     }, 'image/png');
   };
   img.onerror = () => {
     alert('Could not render overlay. The background image may block export (CORS). Try a locally-uploaded image.');
     URL.revokeObjectURL(url);
+    restoreOnScreenState();
   };
   img.src = url;
 }
