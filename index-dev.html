@@ -5898,10 +5898,11 @@ function renderExternalLabel(area, statusColor){
   }
   if(lineCount === 0) return;
 
-  // Box dimensions tuned for readability (v44).
-  // Was lineH=12/14, labelW=210/185 → bumped ~20% so larger fonts fit cleanly.
-  const lineH = isAllView ? 14 : 17;
-  const padding = 12;
+  // Box dimensions (v44 iter 2): tighter padding, smaller border, right-aligned text.
+  // padding 12 → 6 freed up ~12px width that text now uses, so font can grow
+  // without making the label box bigger overall.
+  const lineH = isAllView ? 14 : 16;
+  const padding = 6;
   const labelW = isAllView ? 240 : 215;
   const labelH = lineCount * lineH + padding;
 
@@ -5951,7 +5952,7 @@ function renderExternalLabel(area, statusColor){
     svgLayer.appendChild(line);
   }
 
-  // White background, status-colored border
+  // White background, status-colored border (v44 iter 2: stroke 2 → 1, less visual weight).
   const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
   bg.setAttribute('x', labelX);
   bg.setAttribute('y', labelY - labelH/2);
@@ -5960,12 +5961,13 @@ function renderExternalLabel(area, statusColor){
   bg.setAttribute('rx', '3');
   bg.setAttribute('fill', '#ffffff');
   bg.setAttribute('stroke', statusColor);
-  bg.setAttribute('stroke-width', '2');
+  bg.setAttribute('stroke-width', '1');
   g.appendChild(bg);
 
-  // small drag handle indicator (top-left corner dot)
+  // small drag handle indicator — moved to top-right (v44 iter 2) so it
+  // doesn't sit on top of the now-left-aligned text.
   const handle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-  handle.setAttribute('cx', labelX + 6);
+  handle.setAttribute('cx', labelX + labelW - 6);
   handle.setAttribute('cy', labelY - labelH/2 + 6);
   handle.setAttribute('r', 2.5);
   handle.setAttribute('fill', statusColor);
@@ -5974,6 +5976,9 @@ function renderExternalLabel(area, statusColor){
 
   let yCursor = labelY - labelH/2 + padding/2 + lineH/2;
   const cx = labelX + labelW/2;
+  // v44 iter 2: left-edge anchor for left-aligned text. +3 keeps a tiny gap
+  // from the border so characters don't touch the stroke line.
+  const leftX = labelX + 3;
 
   function mkText(x, y, anchor='middle'){
     const t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
@@ -5987,10 +5992,10 @@ function renderExternalLabel(area, statusColor){
     return t;
   }
 
-  // Name line (black text)
+  // Name line (black text), left-aligned (v44 iter 2: was centered).
   if(STATE.toggles.showName){
-    const t = mkText(cx, yCursor);
-    t.style.fontSize = '14px';   // v44: bumped from 11
+    const t = mkText(leftX, yCursor, 'start');
+    t.style.fontSize = '16px';   // v44 iter 2: 11 → 14 → 16
     t.style.fontWeight = '700';
     t.setAttribute('fill', '#111111');
     // In single-task view we normally append the trade short code (e.g. "· TI")
@@ -6067,8 +6072,8 @@ function renderExternalLabel(area, statusColor){
     const ts = calcTaskStatus(taskData);
 
     if(STATE.toggles.showDates){
-      const t = mkText(cx, yCursor);
-      t.style.fontSize = '12px';   // v44: bumped from 9.5
+      const t = mkText(leftX, yCursor, 'start');
+      t.style.fontSize = '14px';   // v44 iter 2: 9.5 → 12 → 14
       t.setAttribute('fill', '#111111');
       const s = taskPlanStart(taskData) && taskPlanEnd(taskData)
         ? `Plan: ${fmtDate(taskPlanStart(taskData))} → ${fmtDate(taskPlanEnd(taskData))}`
@@ -6079,8 +6084,8 @@ function renderExternalLabel(area, statusColor){
     }
 
     if(STATE.toggles.showActual){
-      const t = mkText(cx, yCursor);
-      t.style.fontSize = '12px';   // v44: bumped from 9.5
+      const t = mkText(leftX, yCursor, 'start');
+      t.style.fontSize = '14px';   // v44 iter 2
       t.setAttribute('fill', '#444444');
       const s = (taskData.actualStart || taskData.actualEnd)
         ? `Actual: ${fmtDate(taskData.actualStart)} → ${fmtDate(taskData.actualEnd)}`
@@ -6091,8 +6096,8 @@ function renderExternalLabel(area, statusColor){
     }
 
     if(STATE.toggles.showPct){
-      const t = mkText(cx, yCursor);
-      t.style.fontSize = '12px';   // v44: bumped from 9.5
+      const t = mkText(leftX, yCursor, 'start');
+      t.style.fontSize = '14px';   // v44 iter 2
       t.setAttribute('fill', '#333333');
       t.textContent = `Plan: ${Math.round(calcPlanPercent(taskData))}%  Actual: ${Math.round(Number(taskData.percentActual)||0)}%`;
       g.appendChild(t);
@@ -6100,8 +6105,8 @@ function renderExternalLabel(area, statusColor){
     }
 
     if(STATE.toggles.showStatus){
-      const t = mkText(cx, yCursor);
-      t.style.fontSize = '12px';   // v44: bumped from 10
+      const t = mkText(leftX, yCursor, 'start');
+      t.style.fontSize = '14px';   // v44 iter 2: 10 → 12 → 14
       t.style.fontWeight = '700';
       t.setAttribute('fill', ts.color);
       t.textContent = '[ ' + ts.label.toUpperCase() + ' ]';
