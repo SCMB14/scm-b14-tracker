@@ -1754,17 +1754,14 @@
 </style>
 </head>
 <body>
-
-<div id="devBanner" style="position:sticky;top:0;z-index:99999;background:repeating-linear-gradient(45deg,#ff6b00,#ff6b00 12px,#000 12px,#000 24px);color:#fff;font-family:'Courier New',monospace;font-weight:900;font-size:13px;text-align:center;padding:6px 12px;letter-spacing:2px;text-shadow:1px 1px 2px #000;border-bottom:3px solid #000">
-  ⚠ DEV ENVIRONMENT — TEST DATA — NOT THE OFFICIAL VERSION ⚠ &nbsp;&nbsp;|&nbsp;&nbsp; collection: scm-b14-dev
-</div>
+<div id="devBanner" style="background:#f97316;color:#000;padding:6px 12px;text-align:center;font-weight:700;font-size:13px;font-family:monospace">⚠ DEV BUILD — scm-b14-dev namespace (separate from prod data)</div>
 
 <header>
   <button class="hamburger-btn" id="hamburgerBtn" title="Open/close menu" aria-label="Toggle sidebar">☰</button>
   <button class="quick-entry-btn" id="quickEntryBtn" title="Quick Entry — fast per-unit progress input" aria-label="Quick Entry">⚡</button>
   <div class="logo">SCM<span>·B14</span> PROGRESS</div>
   <div class="subtitle">Multi-Task<br>Construction Tracker</div>
-  <div style="font-size:11px;color:#000;background:var(--green);padding:3px 10px;border-radius:12px;font-weight:700;font-family:var(--font-mono)">v45</div>
+  <div style="font-size:11px;color:#000;background:var(--green);padding:3px 10px;border-radius:12px;font-weight:700;font-family:var(--font-mono)">v44</div>
   <div class="toolbar">
     <button class="btn" id="loadImageBtn" title="Load floor plan (image or PDF) for the current floor">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg>
@@ -1975,7 +1972,7 @@
       <button class="floor-btn wide" id="cleanupFloorsBtn" style="margin-top:6px;border-color:#ef4444;color:#ef4444">🧹 Cleanup empty floors</button>
       <button class="floor-btn wide" id="resetHistoryBtn" style="margin-top:6px;border-color:#ef4444;color:#ef4444">🗑 Reset plan history</button>
       <button class="floor-btn wide" id="reloadCloudBtn" style="margin-top:6px;border-color:#3b82f6;color:#3b82f6">🔄 Force reload from cloud</button>
-      <div class="hint" style="margin-top:6px">Each floor keeps its own progress &amp; plan image. After "+ Add", use <b>Load Plan</b> (top bar) to upload an image or PDF for that floor. <b>Copy areas</b> can now also auto-create floors (e.g. <code>new: 5F-24F</code>) and rename areas by pattern (e.g. <code>A04 → A{NN}</code>) — copies shapes only, not dates/%.</div>
+      <div class="hint" style="margin-top:6px">Each floor keeps its own progress &amp; plan image. After "+ Add", use <b>Load Plan</b> (top bar) to upload an image or PDF for that floor. "Copy areas" copies only shapes (names &amp; outlines), not dates/%.</div>
     </div>
 
     <!-- TASK SELECTOR -->
@@ -4063,18 +4060,8 @@ function duplicateFloor(){
   if(!f) return;
   const copy = makeFloor(f.name + ' (copy)', f.image);
   copy.imgW = f.imgW; copy.imgH = f.imgH;
-  // === ID FRESHNESS FIX (v44) ===
-  // Old code: JSON.parse(JSON.stringify(f.areas)) — preserved every area's
-  // original ID across floors, so two different floors had two areas with
-  // the SAME id. That broke selection (clicking one selected both),
-  // Excel/JSON imports, and Firestore writes (the cloud doc was keyed by
-  // floor.id but areas inside that floor expected unique area.id).
-  // Now: deep-clone the data per area but mint a fresh area.id for each.
-  copy.areas = (f.areas||[]).map(a => {
-    const cloned = JSON.parse(JSON.stringify(a));
-    cloned.id = 'area_' + Date.now() + '_' + Math.floor(Math.random()*100000);
-    return cloned;
-  });
+  // deep-copy areas WITH their data (full duplicate)
+  copy.areas = JSON.parse(JSON.stringify(f.areas));
   STATE.floors.push(copy);
   switchToFloor(copy.id);
 }
@@ -4117,167 +4104,47 @@ async function deleteFloor(){
 
 // Copy only the SHAPES (points, name, labelOffset) of current floor's areas
 // to chosen target floors. Progress data (dates/%/na) is NOT copied.
-// =========================================================================
-// COPY-FROM-TEMPLATE (v44)
-// Use one set-up floor as the template for many. B14 floors share ~80-100%
-// of layout so this is the highest-ROI shortcut for setting up a building:
-// trace areas once on (say) 4F, then propagate the shapes — with auto-
-// renamed apartment prefixes — to every other floor in one step.
-// =========================================================================
 function copyAreasToFloors(){
   const src = currentFloor();
   if(!src) return;
   if(src.areas.length === 0){ alert('This floor has no areas to copy.'); return; }
-  const existing = STATE.floors.filter(f => f.id !== src.id);
+  const targets = STATE.floors.filter(f => f.id !== src.id);
+  if(targets.length === 0){ alert('Add more floors first, then copy.'); return; }
 
-  // Step 1: choose targets. Three syntaxes supported:
-  //   1,2,3      → existing floors by number from the list
-  //   all        → every existing floor (other than source)
-  //   new: 5F,6F → create new floors with those names
-  //   new: 5F-24F → range; creates 5F, 6F, …, 24F (digits incremented, suffix preserved)
-  //   new: 5-24F  → also accepted (number range with shared suffix)
-  const listTxt = existing.length
-    ? existing.map((f, i) => `${i+1}. ${f.name}`).join('\n')
-    : '(no existing floors yet — use "new:" syntax)';
+  // Simple multi-select via prompt of indices
+  const list = targets.map((f, i) => `${i+1}. ${f.name}`).join('\n');
   const ans = prompt(
-    `Copy ${src.areas.length} area shape(s) from "${src.name}" to which floors?\n\n` +
-    `EXISTING:\n${listTxt}\n\n` +
-    `Enter numbers (1,2,3) or "all", OR\n` +
-    `Create new floors with "new: 5F,6F,7F" or "new: 5F-24F" (range).`,
-    existing.length ? 'all' : 'new: 5F-24F'
+    `Copy ${src.areas.length} area shape(s) from "${src.name}" to which floors?\n\n${list}\n\nEnter numbers separated by commas (e.g. 1,2,3), or "all":`,
+    'all'
   );
   if(ans === null) return;
 
-  let chosen = [];
-  let createdLabels = [];
-  const trimmed = ans.trim();
-  if(/^new:/i.test(trimmed)){
-    // Auto-create the named floors.
-    const namesPart = trimmed.replace(/^new:/i, '').trim();
-    const names = expandFloorNames(namesPart);
-    if(names.length === 0){ alert('Could not parse any floor names from: ' + namesPart); return; }
-    names.forEach(nm => {
-      // If a floor with this exact name already exists, reuse it (no dup).
-      let f = STATE.floors.find(x => x.name === nm);
-      if(!f){
-        f = makeFloor(nm, src.image);
-        f.imgW = src.imgW; f.imgH = src.imgH;
-        STATE.floors.push(f);
-        createdLabels.push(nm);
-      }
-      chosen.push(f);
-    });
-  } else if(trimmed.toLowerCase() === 'all'){
-    chosen = existing;
+  let chosen;
+  if(ans.trim().toLowerCase() === 'all'){
+    chosen = targets;
   } else {
-    const nums = trimmed.split(',').map(s => parseInt(s.trim(),10)).filter(n => !isNaN(n));
-    chosen = nums.map(n => existing[n-1]).filter(Boolean);
+    const nums = ans.split(',').map(s => parseInt(s.trim(),10)).filter(n => !isNaN(n));
+    chosen = nums.map(n => targets[n-1]).filter(Boolean);
   }
-  if(chosen.length === 0){ alert('No valid target floors.'); return; }
+  if(chosen.length === 0){ alert('No valid floors selected.'); return; }
 
-  // Step 2: optional area-name rename pattern.
-  const renameRaw = prompt(
-    'Rename area names by pattern? (leave empty to keep names same)\n\n' +
-    'Format:  FIND → REPLACE\n' +
-    'Use {N} for the target floor number (extracted from floor name).\n' +
-    'Use {NN} for zero-padded 2-digit number.\n\n' +
-    'Examples:\n' +
-    '  A04 → A{NN}        A04.01-LIVING  becomes  A05.01-LIVING on 5F\n' +
-    '  04. → {NN}.        same as above, shorter find\n' +
-    '  A4. → A{N}.        A4.01 → A5.01 (no padding)',
-    ''
+  const replace = confirm(
+    'OK = REPLACE existing areas on target floors with these shapes.\n' +
+    'Cancel = ADD these shapes alongside existing areas.'
   );
-  if(renameRaw === null) return;
-  const rename = parseRenamePattern(renameRaw);
 
-  // Step 3: replace vs add. Only ask for existing floors that already have areas.
-  const targetsWithAreas = chosen.filter(f => (f.areas||[]).length > 0);
-  let replace = false;
-  if(targetsWithAreas.length > 0){
-    replace = confirm(
-      `${targetsWithAreas.length} target floor(s) already have areas.\n\n` +
-      'OK = REPLACE existing areas with these shapes.\n' +
-      'Cancel = ADD these shapes alongside existing areas.'
-    );
-  } else {
-    // Floors are empty (likely just-created) → safe to replace (== add)
-    replace = true;
-  }
-
-  let totalAreas = 0;
   chosen.forEach(tf => {
-    const floorNum = extractFloorNumber(tf.name);
     const shapes = src.areas.map(a => {
       const na = makeBlankAreaFrom(a);
-      if(rename && floorNum != null){
-        na.name = applyRename(na.name, rename, floorNum);
-      }
       return na;
     });
     if(replace) tf.areas = shapes;
     else tf.areas = tf.areas.concat(shapes);
-    totalAreas += shapes.length;
   });
 
   renderFloorSelect();
   render();
-  alert(
-    `Done.\n` +
-    `• Floors created: ${createdLabels.length}${createdLabels.length ? ' (' + createdLabels.join(', ') + ')' : ''}\n` +
-    `• Floors updated: ${chosen.length}\n` +
-    `• Total areas copied: ${totalAreas}` +
-    (rename ? '\n• Rename applied: ' + rename.find + ' → ' + rename.replace : '')
-  );
-}
-
-// ---- Helpers for Copy-From-Template ----
-
-// Expands a comma-separated floor-name spec into an actual list. Supports
-// individual names ("5F,6F,7F") and numeric ranges ("5F-24F", "5-24F").
-function expandFloorNames(raw){
-  const out = [];
-  raw.split(',').map(s => s.trim()).filter(Boolean).forEach(token => {
-    // Try to interpret "5F-24F" or "5-24F" as a range.
-    const rangeMatch = token.match(/^(\d+)(\D*)-(\d+)(\D*)$/);
-    if(rangeMatch){
-      const startN = parseInt(rangeMatch[1],10);
-      const startSuf = rangeMatch[2];
-      const endN = parseInt(rangeMatch[3],10);
-      const endSuf = rangeMatch[4] || startSuf;  // "5-24F" → suffix "F"
-      const suffix = endSuf || startSuf;
-      const [lo, hi] = startN <= endN ? [startN, endN] : [endN, startN];
-      for(let n = lo; n <= hi; n++){
-        out.push(n + suffix);
-      }
-    } else {
-      out.push(token);
-    }
-  });
-  return out;
-}
-
-function parseRenamePattern(raw){
-  if(!raw || !raw.trim()) return null;
-  // Accept "A04 → A{N}" or "A04 -> A{N}"
-  const parts = raw.split(/\s*(?:→|->)\s*/);
-  if(parts.length !== 2 || !parts[0]) return null;
-  return { find: parts[0], replace: parts[1] };
-}
-
-// Pull the first integer out of a floor name. "5F" → 5; "Floor 10" → 10;
-// "B-21" → 21. Returns null if no digits.
-function extractFloorNumber(floorName){
-  const m = (floorName||'').match(/\d+/);
-  return m ? parseInt(m[0], 10) : null;
-}
-
-// Replace every occurrence of `pattern.find` in `areaName` with `pattern.replace`,
-// substituting {N} → floorNum and {NN} → zero-padded 2-digit floorNum first.
-function applyRename(areaName, pattern, floorNum){
-  const replacement = pattern.replace
-    .replace(/\{NN\}/g, String(floorNum).padStart(2, '0'))
-    .replace(/\{N\}/g, String(floorNum));
-  return (areaName||'').split(pattern.find).join(replacement);
+  alert(`Copied ${src.areas.length} shape(s) to ${chosen.length} floor(s).`);
 }
 
 // Remove every floor that has zero areas (junk floors). Also deletes them from
@@ -5135,6 +5002,7 @@ function screenToImg(sx, sy){
 function setZoom(z){
   STATE.zoom = Math.max(0.1, Math.min(8, z));
   applyTransform();
+  scheduleLabelRerender();  // v44: zoom-invariant labels need re-render
 }
 function fitToScreen(){
   if(!STATE.imgW) return;
@@ -5147,6 +5015,22 @@ function fitToScreen(){
   STATE.pan.x = (r.width - STATE.imgW * z * 1.4) / 2;
   STATE.pan.y = (r.height - STATE.imgH * z) / 2;
   applyTransform();
+  scheduleLabelRerender();  // v44
+}
+
+// === ZOOM-INVARIANT LABEL RE-RENDER (v44) ===
+// Labels now scale inversely with canvas zoom so they stay constant on
+// screen. To make that work, we have to actually re-compute each label's
+// SVG transform whenever the canvas zoom changes. Wheel/pinch fires many
+// events per second so we coalesce into one re-render per animation frame.
+let __zoomRerenderPending = false;
+function scheduleLabelRerender(){
+  if(__zoomRerenderPending) return;
+  __zoomRerenderPending = true;
+  requestAnimationFrame(() => {
+    __zoomRerenderPending = false;
+    renderCanvasOnly();
+  });
 }
 
 /* =============================================================
@@ -5163,6 +5047,7 @@ function onWheel(e){
   STATE.pan.y = my - (my - STATE.pan.y) * (newZoom / oldZoom);
   STATE.zoom = newZoom;
   applyTransform();
+  scheduleLabelRerender();  // v44: zoom-invariant labels
 }
 function onMouseDown(e){
   if(e.target.closest('.zoom-controls')) return;
@@ -5979,9 +5864,11 @@ function renderExternalLabel(area, statusColor){
   }
   if(lineCount === 0) return;
 
-  const lineH = isAllView ? 12 : 14;
-  const padding = 10;
-  const labelW = isAllView ? 210 : 185;
+  // Box dimensions tuned for readability (v44).
+  // Was lineH=12/14, labelW=210/185 → bumped ~20% so larger fonts fit cleanly.
+  const lineH = isAllView ? 14 : 17;
+  const padding = 12;
+  const labelW = isAllView ? 240 : 215;
   const labelH = lineCount * lineH + padding;
 
   // Base (auto) position to the right of the polygon
@@ -6004,7 +5891,13 @@ function renderExternalLabel(area, statusColor){
 
   // Apply user label-size scaling, pivoting around the label's left-middle
   // (the point the leader line connects to) so it grows outward naturally.
-  const s = STATE.labelScale || 1;
+  // === ZOOM-INVARIANT LABELS (v44) ===
+  // Old code: `scale(labelScale)` only. Result: when the user zoomed the
+  // canvas OUT to fit the whole floor, labels shrank with it and became
+  // unreadable. Now we divide by the canvas zoom so labels stay at a
+  // CONSTANT screen size regardless of how far you zoom in/out. labelScale
+  // becomes a pure "screen-pixel multiplier".
+  const s = (STATE.labelScale || 1) / (STATE.zoom || 1);
   if(s !== 1){
     g.setAttribute('transform', `translate(${labelX} ${labelY}) scale(${s}) translate(${-labelX} ${-labelY})`);
   }
@@ -6063,7 +5956,7 @@ function renderExternalLabel(area, statusColor){
   // Name line (black text)
   if(STATE.toggles.showName){
     const t = mkText(cx, yCursor);
-    t.style.fontSize = '11px';
+    t.style.fontSize = '14px';   // v44: bumped from 11
     t.style.fontWeight = '700';
     t.setAttribute('fill', '#111111');
     // In single-task view we normally append the trade short code (e.g. "· TI")
@@ -6102,7 +5995,7 @@ function renderExternalLabel(area, statusColor){
       let infoLeft = labelX + 17;
       if(showCode){
         const lbl = mkText(labelX + 17, yCursor, 'start');
-        lbl.style.fontSize = '9px';
+        lbl.style.fontSize = '11px';   // v44: bumped from 9
         lbl.style.fontWeight = '700';
         lbl.setAttribute('fill', '#111111');
         lbl.textContent = taskDef.short;
@@ -6119,7 +6012,7 @@ function renderExternalLabel(area, statusColor){
       }
       if(STATE.toggles.showPct) parts.push(`P${planPct}% A${actPct}%`);
       const info = mkText(infoLeft, yCursor, 'start');
-      info.style.fontSize = '8.5px';
+      info.style.fontSize = '10.5px';   // v44: bumped from 8.5
       info.setAttribute('fill', '#333333');
       info.textContent = parts.join('  ');
       g.appendChild(info);
@@ -6127,7 +6020,7 @@ function renderExternalLabel(area, statusColor){
       // status (colored)
       if(STATE.toggles.showStatus){
         const sb = mkText(labelX + labelW - 6, yCursor, 'end');
-        sb.style.fontSize = '8px';
+        sb.style.fontSize = '10px';   // v44: bumped from 8
         sb.style.fontWeight = '700';
         sb.setAttribute('fill', ts.color);
         sb.textContent = ts.label.toUpperCase();
@@ -6141,7 +6034,7 @@ function renderExternalLabel(area, statusColor){
 
     if(STATE.toggles.showDates){
       const t = mkText(cx, yCursor);
-      t.style.fontSize = '9.5px';
+      t.style.fontSize = '12px';   // v44: bumped from 9.5
       t.setAttribute('fill', '#111111');
       const s = taskPlanStart(taskData) && taskPlanEnd(taskData)
         ? `Plan: ${fmtDate(taskPlanStart(taskData))} → ${fmtDate(taskPlanEnd(taskData))}`
@@ -6153,7 +6046,7 @@ function renderExternalLabel(area, statusColor){
 
     if(STATE.toggles.showActual){
       const t = mkText(cx, yCursor);
-      t.style.fontSize = '9.5px';
+      t.style.fontSize = '12px';   // v44: bumped from 9.5
       t.setAttribute('fill', '#444444');
       const s = (taskData.actualStart || taskData.actualEnd)
         ? `Actual: ${fmtDate(taskData.actualStart)} → ${fmtDate(taskData.actualEnd)}`
@@ -6165,7 +6058,7 @@ function renderExternalLabel(area, statusColor){
 
     if(STATE.toggles.showPct){
       const t = mkText(cx, yCursor);
-      t.style.fontSize = '9.5px';
+      t.style.fontSize = '12px';   // v44: bumped from 9.5
       t.setAttribute('fill', '#333333');
       t.textContent = `Plan: ${Math.round(calcPlanPercent(taskData))}%  Actual: ${Math.round(Number(taskData.percentActual)||0)}%`;
       g.appendChild(t);
@@ -6174,7 +6067,7 @@ function renderExternalLabel(area, statusColor){
 
     if(STATE.toggles.showStatus){
       const t = mkText(cx, yCursor);
-      t.style.fontSize = '10px';
+      t.style.fontSize = '12px';   // v44: bumped from 10
       t.style.fontWeight = '700';
       t.setAttribute('fill', ts.color);
       t.textContent = '[ ' + ts.label.toUpperCase() + ' ]';
@@ -7535,13 +7428,7 @@ function exportExcel(){
     return w;
   };
 
-  // === CORRIDOR DETECTION (v45) ===
-  // Areas whose name contains "CORRIDOR" (case-insensitive) live in their own
-  // dedicated sheet. They're omitted from the ALL and per-floor sheets so the
-  // user can review building progress and corridor progress separately.
-  const isCorridor = (name) => /corridor/i.test(name || '');
-
-  // ============= ALL sheet (corridor areas filtered out) =============
+  // ============= ALL sheet =============
   // Drop Floor ID and Area ID — match areas by Floor name + Area Name.
   const allBase = ['No.', 'Floor', 'Area Name'];
   const allRow0 = [...allBase.map(()=>''), ...TASKS.flatMap(t => [t.name, ...Array(colsPerTrade-1).fill('')])];
@@ -7551,7 +7438,6 @@ function exportExcel(){
   const allData = [];
   let counter = 1;
   STATE.floors.forEach(f => (f.areas||[]).forEach(a => {
-    if(isCorridor(a.name)) return;   // corridor → dedicated sheet below
     allData.push(buildDataRow([counter++, f.name, a.name], a));
   }));
   const wsAll = XLSX.utils.aoa_to_sheet([allRow0, allRow1, allRow2, ...allData]);
@@ -7564,36 +7450,14 @@ function exportExcel(){
   ];
   XLSX.utils.book_append_sheet(wb, wsAll, 'ALL');
 
-  // ============= CORRIDOR sheet (v45) =============
-  // Single sheet across all floors, only corridor areas. Mirrors the ALL
-  // sheet's column structure so the user can view/edit identically.
-  const corridorData = [];
-  let cCounter = 1;
-  STATE.floors.forEach(f => (f.areas||[]).forEach(a => {
-    if(!isCorridor(a.name)) return;
-    corridorData.push(buildDataRow([cCounter++, f.name, a.name], a));
-  }));
-  if(corridorData.length > 0){
-    const wsC = XLSX.utils.aoa_to_sheet([allRow0, allRow1, allRow2, ...corridorData]);
-    wsC['!merges'] = buildMerges(allBase.length);
-    applyFormats(wsC, allBase.length, 3, corridorData.length);
-    wsC['!views'] = [{ state: 'frozen', xSplit: allBase.length, ySplit: 3 }];
-    wsC['!cols'] = [
-      {wch:5}, {wch:10}, {wch:26},
-      ...TASKS.flatMap(() => colWidthsForTrade()),
-    ];
-    XLSX.utils.book_append_sheet(wb, wsC, 'CORRIDOR');
-  }
-
-  // ============= Per-floor sheets (corridor areas filtered out) =============
+  // ============= Per-floor sheets =============
   STATE.floors.forEach(f => {
-    const nonCorridor = (f.areas||[]).filter(a => !isCorridor(a.name));
-    if(nonCorridor.length === 0) return;   // skip floor if it has only corridors (or is empty)
+    if((f.areas||[]).length === 0) return;
     const fBase = ['No.', 'Area Name'];
     const fRow0 = [...fBase.map(()=>''), ...TASKS.flatMap(t => [t.name, ...Array(colsPerTrade-1).fill('')])];
     const fRow1 = [...fBase.map(()=>''), ...TASKS.flatMap(() => subgroupRowCells)];
     const fRow2 = [...fBase, ...TASKS.flatMap(t => detailBase.map(c => `${t.short} ${c}`))];
-    const fData = nonCorridor.map((a, i) => buildDataRow([i+1, a.name], a));
+    const fData = (f.areas||[]).map((a, i) => buildDataRow([i+1, a.name], a));
     const ws = XLSX.utils.aoa_to_sheet([fRow0, fRow1, fRow2, ...fData]);
     ws['!merges'] = buildMerges(fBase.length);
     applyFormats(ws, fBase.length, 3, fData.length);
@@ -7942,8 +7806,8 @@ function importExcel(e){
       const areaKey = (floor, area) => floor.id + '|' + area.id;
       wb.SheetNames.forEach(sn => {
         // Skip special sheets: ALL handled below, Plan History handled before,
-        // Initial Plan handled last, CORRIDOR handled cross-floor below.
-        if(sn === 'ALL' || sn === 'Plan History' || sn === 'Initial Plan' || sn === 'CORRIDOR') return;
+        // Initial Plan handled last.
+        if(sn === 'ALL' || sn === 'Plan History' || sn === 'Initial Plan') return;
         const sheetFloor = floorByName[sn];
         if(!sheetFloor) return;   // sheet doesn't map to a known floor; skip
         const ws = wb.Sheets[sn];
@@ -7991,21 +7855,6 @@ function importExcel(e){
           const hit = findAreaForRow(row, null);
           if(!hit){ notFound++; return; }
           if(appliedAreas.has(areaKey(hit.floor, hit.area))) return;  // already applied
-          applyRowToArea(row, hit.area, hit.floor);
-          updated++;
-        });
-      }
-
-      // ===== CORRIDOR sheet (v45) =====
-      // Same shape as ALL but only contains corridor areas. Identical lookup
-      // strategy (Floor name + Area Name across all floors).
-      if(wb.SheetNames.includes('CORRIDOR')){
-        const ws = wb.Sheets['CORRIDOR'];
-        const rows = readSheet(ws);
-        rows.forEach(row => {
-          const hit = findAreaForRow(row, null);
-          if(!hit){ notFound++; return; }
-          if(appliedAreas.has(areaKey(hit.floor, hit.area))) return;
           applyRowToArea(row, hit.area, hit.floor);
           updated++;
         });
@@ -8233,8 +8082,8 @@ function loadProject(e){
    CLOUD SYNC (Firestore) — auto-save + real-time listening
    ============================================================
    Schema:
-     /projects/scm-b14-dev/meta       → {tasks, today, currentTask, toggles, cutoffDate, labelScale, snapshots, currentFloorId, floorOrder: [floorId,...]}
-     /projects/scm-b14-dev/floors/<floorId> → {id,name,image,imgW,imgH,areas:[...]}
+     /projects/scm-b14/meta       → {tasks, today, currentTask, toggles, cutoffDate, labelScale, snapshots, currentFloorId, floorOrder: [floorId,...]}
+     /projects/scm-b14/floors/<floorId> → {id,name,image,imgW,imgH,areas:[...]}
    Each floor is its own doc to stay under the 1MB/doc Firestore limit.
 */
 const CLOUD = {
