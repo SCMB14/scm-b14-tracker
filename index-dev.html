@@ -5833,11 +5833,13 @@ function renderExternalLabel(area, statusColor){
   // === DYNAMIC LABEL WIDTH (v44) ===
   // Pre-build every visible string and estimate its width so the box fits
   // content exactly — no wasted right-edge whitespace for short names like
-  // "A05.01", no clipping for long ones like "A05.CORRIDOR  P50% A30%".
-  // JetBrains Mono is uniform-width: char_width ≈ 0.6 × font_size is a tight
-  // bound that avoids a costly DOM measurement pass on every render.
+  // "A05.01", no clipping for long ones like "A05.CORRIDOR".
+  // v44 iter 2: switched to Arial (more readable than JetBrains Mono at this
+  // size). Arial is PROPORTIONAL not monospace, so widths vary per character.
+  // Empirically Arial averages ~0.55 × fontSize per char for mixed content;
+  // we use 0.6 to overestimate slightly (oversized box > clipped text).
   const CHAR_RATIO = 0.6;
-  const FONT = { name: 16, info: 14, allCode: 12, allInfo: 12, allStatus: 10 };
+  const FONT = { name: 20, info: 17, allCode: 14, allInfo: 14, allStatus: 12 };
   // widths[i] = pixel width that line i's text content needs (excluding box padding)
   const widths = [];
 
@@ -5902,8 +5904,8 @@ function renderExternalLabel(area, statusColor){
   if(lineCount === 0) return;
 
   // Box geometry. padding 10 → 6 (less whitespace), lineH bumped to fit
-  // taller fonts (name 16, info 14). labelW grows to the widest line.
-  const lineH = isAllView ? 16 : 18;
+  // bigger fonts (name 20, info 17). labelW grows to the widest line.
+  const lineH = isAllView ? 19 : 22;
   const padding = 6;
   const maxW = Math.max(...widths);
   const labelW = Math.max(80, Math.ceil(maxW + padding * 2));
@@ -5982,7 +5984,7 @@ function renderExternalLabel(area, statusColor){
     t.setAttribute('y', y);
     t.setAttribute('text-anchor', anchor);
     t.setAttribute('dominant-baseline', 'central');
-    t.style.fontFamily = "'JetBrains Mono', monospace";
+    t.style.fontFamily = "Arial, sans-serif";   // v44 iter 2: Mono → Arial
     t.style.pointerEvents = 'none';
     t.style.userSelect = 'none';
     return t;
@@ -5991,7 +5993,7 @@ function renderExternalLabel(area, statusColor){
   // Name line (black text) — v44: left-aligned, font 11 → 16
   if(STATE.toggles.showName){
     const t = mkText(leftX, yCursor, 'start');
-    t.style.fontSize = '16px';
+    t.style.fontSize = '20px';
     t.style.fontWeight = '700';
     t.setAttribute('fill', '#111111');
     if(isAllView || !STATE.toggles.showTradeCode){
@@ -6027,7 +6029,7 @@ function renderExternalLabel(area, statusColor){
       let infoLeft = labelX + 17;
       if(showCode){
         const lbl = mkText(labelX + 17, yCursor, 'start');
-        lbl.style.fontSize = '12px';   // v44: 9 → 12
+        lbl.style.fontSize = '14px';   // v44: 9 → 12
         lbl.style.fontWeight = '700';
         lbl.setAttribute('fill', '#111111');
         lbl.textContent = taskDef.short;
@@ -6044,7 +6046,7 @@ function renderExternalLabel(area, statusColor){
       }
       if(STATE.toggles.showPct) parts.push(`P${planPct}% A${actPct}%`);
       const info = mkText(infoLeft, yCursor, 'start');
-      info.style.fontSize = '12px';   // v44: 8.5 → 12
+      info.style.fontSize = '14px';   // v44: 8.5 → 12
       info.setAttribute('fill', '#333333');
       info.textContent = parts.join('  ');
       g.appendChild(info);
@@ -6052,7 +6054,7 @@ function renderExternalLabel(area, statusColor){
       // status (colored)
       if(STATE.toggles.showStatus){
         const sb = mkText(labelX + labelW - 6, yCursor, 'end');
-        sb.style.fontSize = '10px';   // v44: 8 → 10
+        sb.style.fontSize = '12px';   // v44: 8 → 10
         sb.style.fontWeight = '700';
         sb.setAttribute('fill', ts.color);
         sb.textContent = ts.label.toUpperCase();
@@ -6066,7 +6068,7 @@ function renderExternalLabel(area, statusColor){
 
     if(STATE.toggles.showDates){
       const t = mkText(leftX, yCursor, 'start');
-      t.style.fontSize = '14px';
+      t.style.fontSize = '17px';
       t.setAttribute('fill', '#111111');
       const s = taskPlanStart(taskData) && taskPlanEnd(taskData)
         ? `Plan: ${fmtDate(taskPlanStart(taskData))} → ${fmtDate(taskPlanEnd(taskData))}`
@@ -6078,7 +6080,7 @@ function renderExternalLabel(area, statusColor){
 
     if(STATE.toggles.showActual){
       const t = mkText(leftX, yCursor, 'start');
-      t.style.fontSize = '14px';
+      t.style.fontSize = '17px';
       t.setAttribute('fill', '#444444');
       const s = (taskData.actualStart || taskData.actualEnd)
         ? `Actual: ${fmtDate(taskData.actualStart)} → ${fmtDate(taskData.actualEnd)}`
@@ -6090,7 +6092,7 @@ function renderExternalLabel(area, statusColor){
 
     if(STATE.toggles.showPct){
       const t = mkText(leftX, yCursor, 'start');
-      t.style.fontSize = '14px';
+      t.style.fontSize = '17px';
       t.setAttribute('fill', '#333333');
       t.textContent = `Plan: ${Math.round(calcPlanPercent(taskData))}%  Actual: ${Math.round(Number(taskData.percentActual)||0)}%`;
       g.appendChild(t);
@@ -6099,7 +6101,7 @@ function renderExternalLabel(area, statusColor){
 
     if(STATE.toggles.showStatus){
       const t = mkText(leftX, yCursor, 'start');
-      t.style.fontSize = '14px';
+      t.style.fontSize = '17px';
       t.style.fontWeight = '700';
       t.setAttribute('fill', ts.color);
       t.textContent = '[ ' + ts.label.toUpperCase() + ' ]';
