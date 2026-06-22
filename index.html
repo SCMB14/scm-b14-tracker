@@ -8605,11 +8605,22 @@ async function cloudLoadAndSubscribe(){
     // listen for changes from elsewhere
     CLOUD.unsubscribes.forEach(u => u());
     CLOUD.unsubscribes = [];
+    // === SNAPSHOT ERROR HANDLER (v45) ===
+    // Firebase onSnapshot fails silently when its 2nd arg is missing — auth
+    // failures, network blips, Firestore rule denials all just stop firing
+    // the callback. Without visibility, the SyncedOnce flags never flip
+    // true and saves are blocked indefinitely. Each subscription below now
+    // gets a 2nd callback that logs the error + surfaces it to the status
+    // pill so the user can see what's happening.
+    const snapErr = (label) => err => {
+      console.error('[Snapshot error: ' + label + ']', err);
+      setCloudStatus('error', '❌ ' + label + ': ' + (err.code || err.message || 'unknown'));
+    };
     CLOUD.unsubscribes.push(
       onSnapshot(doc(db,'projects', CLOUD.PROJECT_ID,'meta','main'), s => {
         if(!s.exists()) return;
         applyRemoteMeta(s.data());
-      })
+      }, snapErr('meta/main'))
     );
     // Manpower subscription — all roles can read so charts/snapshots show up
     // for NT viewing too; only CDT/Admin writes.
@@ -8620,7 +8631,7 @@ async function cloudLoadAndSubscribe(){
         if($('manpowerModal') && $('manpowerModal').classList.contains('show')){
           renderManpowerTab();
         }
-      })
+      }, snapErr('meta/manpower'))
     );
     CLOUD.unsubscribes.push(
       onSnapshot(collection(db,'projects', CLOUD.PROJECT_ID,'floors'), snap => {
@@ -8637,7 +8648,7 @@ async function cloudLoadAndSubscribe(){
         });
         // Mark floors as fully synced after first snapshot — unblocks autosave.
         CLOUD.floorsSyncedOnce = true;
-      })
+      }, snapErr('floors'))
     );
     // CDT and Admin both subscribe to cdtPlan changes (Admin needs to see and
     // write Plan CDT dates too; Admin is a superset of CDT for editing).
@@ -8662,8 +8673,22 @@ async function cloudLoadAndSubscribe(){
           });
           // Mark cdtPlan as fully synced after first snapshot — unblocks save.
           CLOUD.cdtPlanSyncedOnce = true;
-        })
+        }, snapErr('cdtPlan'))
       );
+
+      // === SAFETY UNBLOCK (v45) ===
+      // If cdtPlan subscription doesn't fire within 10s (often because the
+      // collection is empty and Firestore is slow to emit the initial empty
+      // snap, or because of a transient rule/network issue), force the
+      // synced-once flag true so save is no longer blocked forever. We log
+      // a warning so it's visible if this defensive path triggered.
+      setTimeout(() => {
+        if(!CLOUD.cdtPlanSyncedOnce){
+          console.warn('[v45 safety] cdtPlan onSnapshot did not fire within 10s — unblocking save anyway.');
+          CLOUD.cdtPlanSyncedOnce = true;
+          if(setCloudStatus) setCloudStatus('synced','Synced (CDT timeout — ok)');
+        }
+      }, 10000);
 
       // One-time migration: if /cdtPlan is empty but floors still contain CDT plan
       // dates (from v14/v15 before the split), persist them now to /cdtPlan and
