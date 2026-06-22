@@ -1760,7 +1760,7 @@
   <button class="quick-entry-btn" id="quickEntryBtn" title="Quick Entry — fast per-unit progress input" aria-label="Quick Entry">⚡</button>
   <div class="logo">SCM<span>·B14</span> PROGRESS</div>
   <div class="subtitle">Multi-Task<br>Construction Tracker</div>
-  <div style="font-size:11px;color:#000;background:var(--green);padding:3px 10px;border-radius:12px;font-weight:700;font-family:var(--font-mono)">v44</div>
+  <div style="font-size:11px;color:#000;background:var(--green);padding:3px 10px;border-radius:12px;font-weight:700;font-family:var(--font-mono)">v45</div>
   <div class="toolbar">
     <button class="btn" id="loadImageBtn" title="Load floor plan (image or PDF) for the current floor">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg>
@@ -7619,17 +7619,12 @@ function importExcel(e){
       // Build lookup: floorByName, floorById, areaById global, areaByName per floor
       const floorById = {};
       const floorByName = {};
-      // Also build a normalized (lowercase+trim) lookup to tolerate minor
-      // name mismatches between what Excel stores and what the app has
-      // (e.g. trailing spaces, case differences, ＊ → * substitutions).
-      const floorByNameNorm = {};
       STATE.floors.forEach(fl => {
         floorById[fl.id] = fl;
         floorByName[fl.name] = fl;
-        floorByNameNorm[String(fl.name).trim().toLowerCase()] = fl;
       });
 
-      let updated = 0, notFound = 0, skippedCDT = 0, renamed = 0, skippedHistory = 0, skippedInitial = 0, skippedFloors = [];
+      let updated = 0, notFound = 0, skippedCDT = 0, renamed = 0, skippedHistory = 0, skippedInitial = 0;
 
       const applyRowToArea = (row, area, floor) => {
         ensureAreaTasks(area);
@@ -7748,27 +7743,16 @@ function importExcel(e){
       };
 
       const findAreaForRow = (row, sheetFloor) => {
-        // 1) If row has Floor ID, prefer it; else Floor name (exact, then
-        //    normalized); else fall back to the sheet's own floor.
+        // 1) If row has Floor ID, prefer it; else Floor name; else fall back to sheet's floor
         let floor = null;
         if(row['Floor ID']) floor = floorById[row['Floor ID']];
-        if(!floor && row['Floor']){
-          floor = floorByName[row['Floor']];
-          if(!floor) floor = floorByNameNorm[String(row['Floor']).trim().toLowerCase()];
-        }
+        if(!floor && row['Floor']) floor = floorByName[row['Floor']];
         if(!floor) floor = sheetFloor;
         if(!floor) return null;
         const aId = row['Area ID'];
         const aName = row['Area Name'];
-        // Match area by ID first, then exact name, then normalized name.
-        let area = aId ? (floor.areas||[]).find(a => a.id === aId) : null;
-        if(!area && aName){
-          area = (floor.areas||[]).find(a => a.name === aName);
-          if(!area){
-            const normName = String(aName).trim().toLowerCase();
-            area = (floor.areas||[]).find(a => String(a.name).trim().toLowerCase() === normName);
-          }
-        }
+        let area = (floor.areas||[]).find(a => a.id === aId);
+        if(!area && aName) area = (floor.areas||[]).find(a => a.name === aName);
         return area ? {area, floor} : null;
       };
 
@@ -7869,11 +7853,8 @@ function importExcel(e){
         // Skip special sheets: ALL handled below, Plan History handled before,
         // Initial Plan handled last.
         if(sn === 'ALL' || sn === 'Plan History' || sn === 'Initial Plan') return;
-        // Try exact match first, then normalized (trim+lowercase) — handles
-        // cases where Excel strips/alters special chars in the sheet tab name.
-        let sheetFloor = floorByName[sn];
-        if(!sheetFloor) sheetFloor = floorByNameNorm[sn.trim().toLowerCase()];
-        if(!sheetFloor){ skippedFloors.push(sn); return; }   // sheet doesn't map to a known floor; skip
+        const sheetFloor = floorByName[sn];
+        if(!sheetFloor) return;   // sheet doesn't map to a known floor; skip
         const ws = wb.Sheets[sn];
         const rows = readSheet(ws);
         const floorAreas = sheetFloor.areas || [];
@@ -7969,7 +7950,6 @@ function importExcel(e){
 
       let msg = `Import complete.\nRows applied: ${updated}\nNot matched: ${notFound}`;
       if(renamed) msg += `\nAreas renamed: ${renamed}`;
-      if(skippedFloors.length) msg += `\n⚠️ Sheets skipped (no matching floor): ${skippedFloors.join(', ')}\n  → Floor names in app: ${STATE.floors.map(f=>f.name).join(', ')}`;
       if(skippedHistory) msg += `\nOld plan-NT history protected (kept): ${skippedHistory}`;
       if(skippedCDT) msg += `\nPlan CDT cells skipped (NT cannot write): ${skippedCDT}`;
       if(skippedInitial) msg += `\nInitial-plan cells skipped (NT cannot edit baseline): ${skippedInitial}`;
@@ -8239,27 +8219,35 @@ async function doCloudSave(){
   CLOUD.lastSaveStart = Date.now();
   try{
     const { db, doc, setDoc } = window.FB;
-    const cf = currentFloor();
 
-    // Compute current sigs UPFRONT so each write site checks against the
-    // same snapshot of state.
+    // === MULTI-FLOOR SAVE (v45) ===
+    // Old code only saved currentFloor(). Excel import (which can touch many
+    // floors at once) would write only the focused floor — every other
+    // floor's import data sat in STATE unsaved and was lost on next reload.
+    // Now we scan every floor, build a dirty-list, and write them all
+    // sequentially within this single save invocation.
     const mSig = ROLE.canEditCDT() ? metaDataSig() : null;
-    const cSig = (ROLE.canEditCDT() && cf) ? cdtDataSig(cf) : null;
-    const fSig = cf ? floorDataSig(cf) : null;
+    const metaDirty = (mSig !== null) && (mSig !== CLOUD.lastMetaSig);
 
-    const metaDirty  = (mSig !== null) && (mSig !== CLOUD.lastMetaSig);
-    const cdtDirty   = (cSig !== null) && (cSig !== CLOUD.lastCdtSig[cf.id]);
-    const floorDirty = (fSig !== null) && (fSig !== CLOUD.lastFloorSig[cf.id]);
+    const dirtyFloors = [];
+    for(const f of STATE.floors){
+      const fSig = floorDataSig(f);
+      const cSig = ROLE.canEditCDT() ? cdtDataSig(f) : null;
+      const floorDirty = fSig !== CLOUD.lastFloorSig[f.id];
+      const cdtDirty   = (cSig !== null) && (cSig !== CLOUD.lastCdtSig[f.id]);
+      if(floorDirty || cdtDirty){
+        dirtyFloors.push({ floor: f, fSig, cSig, floorDirty, cdtDirty });
+      }
+    }
 
-    if(!metaDirty && !cdtDirty && !floorDirty){
-      // Nothing actually changed. Don't show "Saving"; status stays as is.
-      // (scheduleCloudSave usually catches this before we get here, but this
-      // is a defensive last line: e.g. a trailing-edge timer firing after
-      // the user undid their change.)
+    if(!metaDirty && dirtyFloors.length === 0){
+      // Nothing actually changed. Defensive last line: trailing-edge timer
+      // firing after the user undid their change.
       CLOUD.saveInFlight = false;
       return;
     }
-    setCloudStatus('saving','Saving…');
+    setCloudStatus('saving',
+      dirtyFloors.length > 1 ? `Saving ${dirtyFloors.length} floors…` : 'Saving…');
 
     // /meta — only when its data actually changed
     if(metaDirty){
@@ -8267,42 +8255,45 @@ async function doCloudSave(){
 await setDoc(doc(db,'projects', CLOUD.PROJECT_ID,'meta','main'), metaDoc);
       CLOUD.lastMetaSig = mSig;
     }
-    // /cdtPlan/<floor>
-    if(cdtDirty){
-      // === DEFENSIVE CHECK (v33-dev): skip /cdtPlan write if floor has areas
-      // but ALL Plan CDT fields are empty. Catches the case where STATE.floors
-      // got out of sync (e.g. cdtPlan onSnapshot disconnected mid-session) and
-      // we'd otherwise wipe cloud data.
-      const hasAreas = (cf.areas||[]).length > 0;
-      let hasAnyCdtData = false;
-      if(hasAreas){
-        outer: for(const a of cf.areas){
-          for(const k of Object.keys(a.tasks||{})){
-            const t = a.tasks[k];
-            if(t.planStartCDT || t.planEndCDT ||
-               (Array.isArray(t.planStartCDTHistory) && t.planStartCDTHistory.length) ||
-               (Array.isArray(t.planEndCDTHistory)   && t.planEndCDTHistory.length)){
-              hasAnyCdtData = true; break outer;
+
+    // Each dirty floor: /cdtPlan/<floor> then /floors/<floor>
+    for(const item of dirtyFloors){
+      const cf = item.floor;
+      if(item.cdtDirty){
+        // === DEFENSIVE CHECK (v33-dev): skip /cdtPlan write if floor has
+        // areas but ALL Plan CDT fields are empty. Catches the case where
+        // STATE.floors got out of sync (e.g. cdtPlan onSnapshot disconnected
+        // mid-session) and we'd otherwise wipe cloud data.
+        const hasAreas = (cf.areas||[]).length > 0;
+        let hasAnyCdtData = false;
+        if(hasAreas){
+          outer: for(const a of cf.areas){
+            for(const k of Object.keys(a.tasks||{})){
+              const t = a.tasks[k];
+              if(t.planStartCDT || t.planEndCDT ||
+                 (Array.isArray(t.planStartCDTHistory) && t.planStartCDTHistory.length) ||
+                 (Array.isArray(t.planEndCDTHistory)   && t.planEndCDTHistory.length)){
+                hasAnyCdtData = true; break outer;
+              }
             }
           }
         }
-      }
-      if(!hasAreas || hasAnyCdtData){
-        const cdtDoc = buildCdtPlanDoc(cf);
-        CLOUD.pendingCdtEchoes.add(cdtDoc.updatedAt);
+        if(!hasAreas || hasAnyCdtData){
+          const cdtDoc = buildCdtPlanDoc(cf);
+          CLOUD.pendingCdtEchoes.add(cdtDoc.updatedAt);
 await setDoc(doc(db,'projects', CLOUD.PROJECT_ID,'cdtPlan', cf.id), cdtDoc);
-        CLOUD.lastCdtSig[cf.id] = cSig;
-      } else {
-        console.warn('[SAFETY] Skipped /cdtPlan save: all CDT data empty for floor', cf.id, cf.name);
+          CLOUD.lastCdtSig[cf.id] = item.cSig;
+        } else {
+          console.warn('[SAFETY] Skipped /cdtPlan save: all CDT data empty for floor', cf.id, cf.name);
+        }
       }
-    }
-    // /floors/<floor>
-    if(floorDirty){
-      const floorDoc = buildFloorDoc(cf);
-      CLOUD.pendingFloorEchoes.add(floorDoc.updatedAt);
+      if(item.floorDirty){
+        const floorDoc = buildFloorDoc(cf);
+        CLOUD.pendingFloorEchoes.add(floorDoc.updatedAt);
 await setDoc(doc(db,'projects', CLOUD.PROJECT_ID,'floors', cf.id), floorDoc, {merge:true});
-      CLOUD.lastFloorImageHash[cf.id] = strHash(cf.image||'');
-      CLOUD.lastFloorSig[cf.id] = fSig;
+        CLOUD.lastFloorImageHash[cf.id] = strHash(cf.image||'');
+        CLOUD.lastFloorSig[cf.id] = item.fSig;
+      }
     }
     setCloudStatus('synced','Synced ' + new Date().toLocaleTimeString().slice(0,5));
   } catch(err){
@@ -8375,12 +8366,16 @@ function cdtDataSig(f){
 // last sent to cloud. scheduleCloudSave bails out early when this is false,
 // so view-switching / toggling do not cost any bytes.
 function hasPendingDataChange(){
-  const cf = currentFloor();
-  if(cf && floorDataSig(cf) !== CLOUD.lastFloorSig[cf.id]) return true;
-  if(ROLE.canEditCDT()){
-    if(metaDataSig() !== CLOUD.lastMetaSig) return true;
-    if(cf && cdtDataSig(cf) !== CLOUD.lastCdtSig[cf.id]) return true;
+  // === MULTI-FLOOR DIRTY CHECK (v45) ===
+  // Old code only checked currentFloor(). Excel import (and bulk operations
+  // like "copy plan dates across floors") can modify dozens of floors at
+  // once; only the focused floor would register as dirty, all others were
+  // silently dropped at reload. Now we walk EVERY floor.
+  for(const f of STATE.floors){
+    if(floorDataSig(f) !== CLOUD.lastFloorSig[f.id]) return true;
+    if(ROLE.canEditCDT() && cdtDataSig(f) !== CLOUD.lastCdtSig[f.id]) return true;
   }
+  if(ROLE.canEditCDT() && metaDataSig() !== CLOUD.lastMetaSig) return true;
   return false;
 }
 
