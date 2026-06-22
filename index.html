@@ -8535,11 +8535,16 @@ function scheduleCloudSave(){
   // 1-3s window before /floors or /cdtPlan onSnapshot fires, pushing an empty
   // STATE up to cloud and wiping data that was already there. This was the
   // root cause of the May/Jun 2026 Plan CDT + %Actual loss incident.
-  if(!CLOUD.floorsSyncedOnce){
+  //
+  // v45 iter 2: Added hard-deadline. If for any reason the snapshot
+  // subscription never fires (Firestore quota, rule misconfig, network blip
+  // that recovers without re-firing), we don't want the user STUCK forever.
+  // After CLOUD.savesUnblockedAt timestamp passes, save proceeds regardless.
+  if(!CLOUD.floorsSyncedOnce && Date.now() < (CLOUD.savesUnblockedAt || Infinity)){
     setCloudStatus('connecting','🔒 Waiting for sync…');
     return;
   }
-  if(ROLE.canEditCDT() && !CLOUD.cdtPlanSyncedOnce){
+  if(ROLE.canEditCDT() && !CLOUD.cdtPlanSyncedOnce && Date.now() < (CLOUD.savesUnblockedAt || Infinity)){
     setCloudStatus('connecting','🔒 Waiting for CDT sync…');
     return;
   }
@@ -8583,6 +8588,13 @@ async function cloudLoadAndSubscribe(){
   if(!window.FB || !window.FB.ready) return;
   if(!ROLE.current){ setCloudStatus('error','No role yet'); return false; }
   setCloudStatus('connecting','Connecting…');
+  // === HARD UNBLOCK DEADLINE (v45 iter 2) ===
+  // Absolute timestamp after which scheduleCloudSave proceeds even if the
+  // subscription flags haven't flipped true. Belt-and-suspenders on top of
+  // the per-subscription safety timeouts: if EVERYTHING goes wrong with
+  // sync (silent failure, paused Firebase, suspended quota), the user is
+  // never stuck unable to save edits/imports past this deadline.
+  CLOUD.savesUnblockedAt = Date.now() + 5000;
   const { db, doc, setDoc, getDoc, onSnapshot, collection, getDocs } = window.FB;
   try{
     // initial fetch
@@ -8676,19 +8688,37 @@ async function cloudLoadAndSubscribe(){
         }, snapErr('cdtPlan'))
       );
 
-      // === SAFETY UNBLOCK (v45) ===
-      // If cdtPlan subscription doesn't fire within 10s (often because the
-      // collection is empty and Firestore is slow to emit the initial empty
-      // snap, or because of a transient rule/network issue), force the
-      // synced-once flag true so save is no longer blocked forever. We log
-      // a warning so it's visible if this defensive path triggered.
-      setTimeout(() => {
-        if(!CLOUD.cdtPlanSyncedOnce){
-          console.warn('[v45 safety] cdtPlan onSnapshot did not fire within 10s — unblocking save anyway.');
-          CLOUD.cdtPlanSyncedOnce = true;
-          if(setCloudStatus) setCloudStatus('synced','Synced (CDT timeout — ok)');
+      // === SAFETY UNBLOCK (v45 iter 2) ===
+      // Originally 10s. Dropped to 3s after user reported the 10s message
+      // looked like a hang. 3s is plenty for Firestore to emit the initial
+      // snapshot (even for an empty collection); if it doesn't, something
+      // is wrong and we shouldn't keep blocking the user.
+      const SAFETY_TIMEOUT_MS = 3000;
+      console.info('[v45] cdtPlan subscription registered, safety unblock in ' + SAFETY_TIMEOUT_MS + 'ms');
+      // Show a live countdown in the status pill so the user can SEE the
+      // sync is working rather than thinking it's hung.
+      let remaining = Math.floor(SAFETY_TIMEOUT_MS / 1000);
+      const tickHandle = setInterval(() => {
+        if(CLOUD.cdtPlanSyncedOnce){
+          clearInterval(tickHandle);
+          return;
         }
-      }, 10000);
+        remaining--;
+        if(remaining > 0){
+          setCloudStatus('connecting', '🔒 Waiting for CDT sync… (' + remaining + 's)');
+        }
+      }, 1000);
+      setTimeout(() => {
+        clearInterval(tickHandle);
+        if(!CLOUD.cdtPlanSyncedOnce){
+          console.warn('[v45 safety] cdtPlan onSnapshot did not fire within ' +
+                       SAFETY_TIMEOUT_MS + 'ms — unblocking save anyway.');
+          CLOUD.cdtPlanSyncedOnce = true;
+          setCloudStatus('synced', 'Synced (timeout ok)');
+        } else {
+          console.info('[v45] cdtPlan synced normally within timeout window');
+        }
+      }, SAFETY_TIMEOUT_MS);
 
       // One-time migration: if /cdtPlan is empty but floors still contain CDT plan
       // dates (from v14/v15 before the split), persist them now to /cdtPlan and
