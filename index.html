@@ -7619,12 +7619,17 @@ function importExcel(e){
       // Build lookup: floorByName, floorById, areaById global, areaByName per floor
       const floorById = {};
       const floorByName = {};
+      // Also build a normalized (lowercase+trim) lookup to tolerate minor
+      // name mismatches between what Excel stores and what the app has
+      // (e.g. trailing spaces, case differences, ＊ → * substitutions).
+      const floorByNameNorm = {};
       STATE.floors.forEach(fl => {
         floorById[fl.id] = fl;
         floorByName[fl.name] = fl;
+        floorByNameNorm[String(fl.name).trim().toLowerCase()] = fl;
       });
 
-      let updated = 0, notFound = 0, skippedCDT = 0, renamed = 0, skippedHistory = 0, skippedInitial = 0;
+      let updated = 0, notFound = 0, skippedCDT = 0, renamed = 0, skippedHistory = 0, skippedInitial = 0, skippedFloors = [];
 
       const applyRowToArea = (row, area, floor) => {
         ensureAreaTasks(area);
@@ -7743,16 +7748,27 @@ function importExcel(e){
       };
 
       const findAreaForRow = (row, sheetFloor) => {
-        // 1) If row has Floor ID, prefer it; else Floor name; else fall back to sheet's floor
+        // 1) If row has Floor ID, prefer it; else Floor name (exact, then
+        //    normalized); else fall back to the sheet's own floor.
         let floor = null;
         if(row['Floor ID']) floor = floorById[row['Floor ID']];
-        if(!floor && row['Floor']) floor = floorByName[row['Floor']];
+        if(!floor && row['Floor']){
+          floor = floorByName[row['Floor']];
+          if(!floor) floor = floorByNameNorm[String(row['Floor']).trim().toLowerCase()];
+        }
         if(!floor) floor = sheetFloor;
         if(!floor) return null;
         const aId = row['Area ID'];
         const aName = row['Area Name'];
-        let area = (floor.areas||[]).find(a => a.id === aId);
-        if(!area && aName) area = (floor.areas||[]).find(a => a.name === aName);
+        // Match area by ID first, then exact name, then normalized name.
+        let area = aId ? (floor.areas||[]).find(a => a.id === aId) : null;
+        if(!area && aName){
+          area = (floor.areas||[]).find(a => a.name === aName);
+          if(!area){
+            const normName = String(aName).trim().toLowerCase();
+            area = (floor.areas||[]).find(a => String(a.name).trim().toLowerCase() === normName);
+          }
+        }
         return area ? {area, floor} : null;
       };
 
@@ -7853,8 +7869,11 @@ function importExcel(e){
         // Skip special sheets: ALL handled below, Plan History handled before,
         // Initial Plan handled last.
         if(sn === 'ALL' || sn === 'Plan History' || sn === 'Initial Plan') return;
-        const sheetFloor = floorByName[sn];
-        if(!sheetFloor) return;   // sheet doesn't map to a known floor; skip
+        // Try exact match first, then normalized (trim+lowercase) — handles
+        // cases where Excel strips/alters special chars in the sheet tab name.
+        let sheetFloor = floorByName[sn];
+        if(!sheetFloor) sheetFloor = floorByNameNorm[sn.trim().toLowerCase()];
+        if(!sheetFloor){ skippedFloors.push(sn); return; }   // sheet doesn't map to a known floor; skip
         const ws = wb.Sheets[sn];
         const rows = readSheet(ws);
         const floorAreas = sheetFloor.areas || [];
@@ -7950,6 +7969,7 @@ function importExcel(e){
 
       let msg = `Import complete.\nRows applied: ${updated}\nNot matched: ${notFound}`;
       if(renamed) msg += `\nAreas renamed: ${renamed}`;
+      if(skippedFloors.length) msg += `\n⚠️ Sheets skipped (no matching floor): ${skippedFloors.join(', ')}\n  → Floor names in app: ${STATE.floors.map(f=>f.name).join(', ')}`;
       if(skippedHistory) msg += `\nOld plan-NT history protected (kept): ${skippedHistory}`;
       if(skippedCDT) msg += `\nPlan CDT cells skipped (NT cannot write): ${skippedCDT}`;
       if(skippedInitial) msg += `\nInitial-plan cells skipped (NT cannot edit baseline): ${skippedInitial}`;
