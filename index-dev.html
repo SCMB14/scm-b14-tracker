@@ -2335,14 +2335,16 @@ function floorTaskDetail(floor, taskKey){
   const ntStart = earliest(ntStarts), ntEnd = latest(ntEnds);
   const actualStart = earliest(actualStarts);
   const actualEnd = (allDone && actualEnds.length === areas.length) ? latest(actualEnds) : '';
-  const durationRaw = (planStart && planEnd) ? diffDays(planEnd, planStart) + 1 : null;
-  const duration = Number.isFinite(durationRaw) ? durationRaw : null;
+  const durationRawCDT = (planStart && planEnd) ? diffDays(planEnd, planStart) + 1 : null;
+  const duration = Number.isFinite(durationRawCDT) ? durationRawCDT : null;
+  const durationRawHD = (ntStart && ntEnd) ? diffDays(ntEnd, ntStart) + 1 : null;
+  const durationHD = Number.isFinite(durationRawHD) ? durationRawHD : null;
   const avg = arr => {
     const finite = arr.filter(Number.isFinite);
     return finite.length ? finite.reduce((a,b)=>a+b,0)/finite.length : null;
   };
   return {
-    planStart, planEnd, ntStart, ntEnd, duration,
+    planStart, planEnd, ntStart, ntEnd, duration, durationHD,
     planPct: avg(planPcts), planPctHD: avg(planPctsHD),
     actualStart, actualEnd, actualPct: avg(actualPcts),
   };
@@ -3298,15 +3300,17 @@ function buildTradeDetailTableHtml(data){
   let html = `<table class="dash-table dash-detail-table"><thead>
     <tr>
       <th rowspan="3" class="floor-col-hdr">Level</th>
-      ${TASKS.map(t=>`<th colspan="10" class="dash-grp-hdr" style="border-bottom-color:${t.color}">
+      ${TASKS.map(t=>`<th colspan="11" class="dash-grp-hdr" style="border-bottom-color:${t.color}">
         <span class="dash-grp-swatch" style="background:${t.color}"></span>${t.name}</th>`).join('')}
     </tr>
     <tr>
-      ${TASKS.map(()=>`<th colspan="7">Plan to complete</th><th colspan="3">Actual</th>`).join('')}
+      ${TASKS.map(()=>`<th colspan="8">Plan to complete</th><th colspan="3">Actual</th>`).join('')}
     </tr>
     <tr>
       ${TASKS.map(()=>`
-        <th>Plan start</th><th>Plan finish</th><th>Start Handong</th><th>Finish Handong</th><th>Duration</th><th>%Plan</th><th>%Plan HD</th>
+        <th>Plan start</th><th>Plan finish</th><th>Duration CDT</th>
+        <th>Start Handong</th><th>Finish Handong</th><th>Duration HD</th>
+        <th>%Plan</th><th>%Plan HD</th>
         <th>Actual start</th><th>Actual finish</th><th>%completed</th>
       `).join('')}
     </tr>
@@ -3316,11 +3320,12 @@ function buildTradeDetailTableHtml(data){
     html += `<tr><td class="floor-name">${d.name}</td>`;
     d.detail.forEach(({d:det}) => {
       if(!det){
-        html += `<td class="dash-na">N/A</td>`.repeat(10);
+        html += `<td class="dash-na">N/A</td>`.repeat(11);
       } else {
         html += `<td>${fmtDate(det.planStart)}</td><td>${fmtDate(det.planEnd)}</td>`;
-        html += `<td>${fmtDate(det.ntStart)}</td><td>${fmtDate(det.ntEnd)}</td>`;
         html += `<td>${det.duration===null?'—':det.duration}</td>`;
+        html += `<td>${fmtDate(det.ntStart)}</td><td>${fmtDate(det.ntEnd)}</td>`;
+        html += `<td>${det.durationHD===null?'—':det.durationHD}</td>`;
         html += `<td class="dash-cell" style="background:${pctColor(det.planPct)}">${fmtPct(det.planPct)}</td>`;
         html += `<td class="dash-cell" style="background:${pctColor(det.planPctHD)}">${fmtPct(det.planPctHD)}</td>`;
         html += `<td>${fmtDate(det.actualStart)}</td><td>${fmtDate(det.actualEnd)}</td>`;
@@ -3339,7 +3344,7 @@ function buildTradeDetailTableHtml(data){
       return vals.length ? vals.reduce((a,b)=>a+b,0)/vals.length : null;
     };
     const planAvg = avgOf('planPct'), planHDAvg = avgOf('planPctHD'), actAvg = avgOf('actualPct');
-    html += `<td></td><td></td><td></td><td></td><td></td>`;
+    html += `<td></td><td></td><td></td><td></td><td></td><td></td>`;
     html += `<td class="dash-cell dash-overall">${fmtPct(planAvg)}</td>`;
     html += `<td class="dash-cell dash-overall">${fmtPct(planHDAvg)}</td>`;
     html += `<td></td><td></td>`;
@@ -3582,7 +3587,7 @@ function pctCell(v){
 // the on-screen Dashboard, as an array-of-arrays for XLSX (2 header rows +
 // data rows + Total row), so the exported Excel matches what's on screen.
 function buildTradeDetailAOA(data){
-  const subCols = ['Plan start','Plan finish','Start Handong','Finish Handong','Duration','%Plan','%Plan HD','Actual start','Actual finish','%completed'];
+  const subCols = ['Plan start','Plan finish','Duration CDT','Start Handong','Finish Handong','Duration HD','%Plan','%Plan HD','Actual start','Actual finish','%completed'];
   const headerRow1 = ['Level'];
   const headerRow2 = [''];
   TASKS.forEach(t => {
@@ -3595,11 +3600,13 @@ function buildTradeDetailAOA(data){
     const row = [d.name];
     d.detail.forEach(({d:det}) => {
       if(!det){
-        row.push('N/A','N/A','N/A','N/A','N/A','N/A','N/A','N/A','N/A','N/A');
+        row.push('N/A','N/A','N/A','N/A','N/A','N/A','N/A','N/A','N/A','N/A','N/A');
       } else {
         row.push(
-          det.planStart || '', det.planEnd || '', det.ntStart || '', det.ntEnd || '',
+          det.planStart || '', det.planEnd || '',
           det.duration === null ? '' : det.duration,
+          det.ntStart || '', det.ntEnd || '',
+          det.durationHD === null ? '' : det.durationHD,
           pctCell(det.planPct),
           pctCell(det.planPctHD),
           det.actualStart || '', det.actualEnd || '',
@@ -3618,7 +3625,7 @@ function buildTradeDetailAOA(data){
       const vals = dets.map(x=>x[key]).filter(v => v !== null && Number.isFinite(v));
       return vals.length ? vals.reduce((a,b)=>a+b,0)/vals.length : null;
     };
-    totalRow.push('','','','','', pctCell(avgOf('planPct')), pctCell(avgOf('planPctHD')), '','', pctCell(avgOf('actualPct')));
+    totalRow.push('','','','','','', pctCell(avgOf('planPct')), pctCell(avgOf('planPctHD')), '','', pctCell(avgOf('actualPct')));
   });
   rows.push(totalRow);
 
