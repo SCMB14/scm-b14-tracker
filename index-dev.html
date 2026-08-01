@@ -2335,8 +2335,12 @@ function floorTaskDetail(floor, taskKey){
   const ntStart = earliest(ntStarts), ntEnd = latest(ntEnds);
   const actualStart = earliest(actualStarts);
   const actualEnd = (allDone && actualEnds.length === areas.length) ? latest(actualEnds) : '';
-  const duration = (planStart && planEnd) ? diffDays(planEnd, planStart) + 1 : null;
-  const avg = arr => arr.length ? arr.reduce((a,b)=>a+b,0)/arr.length : null;
+  const durationRaw = (planStart && planEnd) ? diffDays(planEnd, planStart) + 1 : null;
+  const duration = Number.isFinite(durationRaw) ? durationRaw : null;
+  const avg = arr => {
+    const finite = arr.filter(Number.isFinite);
+    return finite.length ? finite.reduce((a,b)=>a+b,0)/finite.length : null;
+  };
   return {
     planStart, planEnd, ntStart, ntEnd, duration,
     planPct: avg(planPcts), planPctHD: avg(planPctsHD),
@@ -3253,9 +3257,32 @@ function applyManpowerFromCloud(doc){
    END MANPOWER MODULE
 ============================================================= */
 
+// Sort floors for Dashboard display: numbered levels descending (24, 23, ...,
+// 1), with non-numeric labels (e.g. "Roof top", "Tech Floor") kept above the
+// numbered levels, in their original relative order — this doesn't touch
+// STATE.floors itself (which still drives the sidebar / floor nav elsewhere
+// in the app), it's a display-only ordering for the Dashboard.
+function floorSortValue(name){
+  const m = String(name).match(/(\d+)/);
+  return m ? parseInt(m[1], 10) : null;
+}
+function sortFloorsForDashboard(floors){
+  return floors
+    .map((f, i) => ({f, i, v: floorSortValue(f.name)}))
+    .sort((a, b) => {
+      const av = a.v === null ? Infinity : a.v;
+      const bv = b.v === null ? Infinity : b.v;
+      if(av !== bv) return bv - av;
+      return a.i - b.i;
+    })
+    .map(x => x.f);
+}
+
 function buildDashboardData(){
-  // rows: floors; cols: trades + overall
-  return STATE.floors.map(f => ({
+  // rows: floors (sorted highest level → lowest); cols: trades + overall
+  const orderedFloors = sortFloorsForDashboard(STATE.floors);
+  return orderedFloors.map(f => ({
+    id: f.id,
     name: f.name,
     areaCount: (f.areas||[]).length,
     trades: TASKS.map(t => ({key:t.key, val: floorTradeAvg(f, t.key)})),
@@ -3544,6 +3571,13 @@ function exportFloorPNG(){
   img.src = url;
 }
 
+// Formats a percent value as an Excel cell: 'N/A' for null/NaN, otherwise a
+// rounded whole-number string with a literal '%' so it reads correctly in
+// Excel (plain numbers there show with no % sign).
+function pctCell(v){
+  return (v === null || v === undefined || !Number.isFinite(v)) ? 'N/A' : Math.round(v) + '%';
+}
+
 // Builds the same wide "Plan/Handong/Actual by floor — all trades" table as
 // the on-screen Dashboard, as an array-of-arrays for XLSX (2 header rows +
 // data rows + Total row), so the exported Excel matches what's on screen.
@@ -3566,10 +3600,10 @@ function buildTradeDetailAOA(data){
         row.push(
           det.planStart || '', det.planEnd || '', det.ntStart || '', det.ntEnd || '',
           det.duration === null ? '' : det.duration,
-          det.planPct === null ? 'N/A' : Math.round(det.planPct),
-          det.planPctHD === null ? 'N/A' : Math.round(det.planPctHD),
+          pctCell(det.planPct),
+          pctCell(det.planPctHD),
           det.actualStart || '', det.actualEnd || '',
-          det.actualPct === null ? 'N/A' : Math.round(det.actualPct)
+          pctCell(det.actualPct)
         );
       }
     });
@@ -3581,10 +3615,10 @@ function buildTradeDetailAOA(data){
   TASKS.forEach(t => {
     const dets = data.map(d => d.detail.find(x=>x.key===t.key).d).filter(Boolean);
     const avgOf = key => {
-      const vals = dets.map(x=>x[key]).filter(v=>v!==null);
-      return vals.length ? Math.round((vals.reduce((a,b)=>a+b,0)/vals.length)*10)/10 : '';
+      const vals = dets.map(x=>x[key]).filter(v => v !== null && Number.isFinite(v));
+      return vals.length ? vals.reduce((a,b)=>a+b,0)/vals.length : null;
     };
-    totalRow.push('','','','','', avgOf('planPct'), avgOf('planPctHD'), '','', avgOf('actualPct'));
+    totalRow.push('','','','','', pctCell(avgOf('planPct')), pctCell(avgOf('planPctHD')), '','', pctCell(avgOf('actualPct')));
   });
   rows.push(totalRow);
 
@@ -3594,15 +3628,16 @@ function buildTradeDetailAOA(data){
 // ---- Export dashboard as Excel ----
 function exportDashboardExcel(){
   const data = buildDashboardData();
-  const rows = data.map((d, idx) => {
+  const rows = data.map((d) => {
     const row = {Floor: d.name, Areas: d.areaCount};
     d.trades.forEach((tr, i) => {
-      row[TASKS[i].short + ' %'] = tr.val === null ? 'N/A' : Math.round(tr.val);
+      row[TASKS[i].short + ' %'] = pctCell(tr.val);
     });
-    row['Overall %'] = d.overall === null ? 'N/A' : Math.round(d.overall);
+    row['Overall %'] = pctCell(d.overall);
     // delay
     let totalDays = 0, n = 0, worst = null;
-    (STATE.floors[idx].areas||[]).forEach(a => {
+    const floorObj = STATE.floors.find(fl => fl.id === d.id);
+    ((floorObj && floorObj.areas) || []).forEach(a => {
       const dl = calcAreaMaxDelay(a);
       if(dl.days !== null){ totalDays += dl.days; n++; if(worst===null||dl.days>worst) worst = dl.days; }
     });
@@ -3637,7 +3672,7 @@ function exportDashboardExcel(){
         Floor: f.name, Area: a.name, Trade: dl.trade.name,
         'Days late': dl.days,
         'Plan End': taskPlanEnd(td) || '',
-        'Actual %': Math.round(Number(td.percentActual)||0),
+        'Actual %': pctCell(Number(td.percentActual)||0),
       });
     }
   }));
@@ -3738,11 +3773,12 @@ function exportDashboardPDF(){
   doc.setDrawColor(200);
   doc.line(14, y, 196, y);
   y += 4;
-  data.forEach((d, i) => {
+  data.forEach((d) => {
     if(y > 270){ doc.addPage(); y = 20; }
     // floor variance
     let totalDays = 0, n = 0;
-    (STATE.floors[i].areas||[]).forEach(a => {
+    const floorObj = STATE.floors.find(fl => fl.id === d.id);
+    ((floorObj && floorObj.areas) || []).forEach(a => {
       const dl = calcAreaMaxDelay(a);
       if(dl.days !== null){ totalDays += dl.days; n++; }
     });
