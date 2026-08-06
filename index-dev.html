@@ -2312,10 +2312,15 @@ function floorUnitTasksForTrade(floor, taskKey){
   const areaById = {};
   (floor.areas||[]).forEach(a => { areaById[a.id] = a; });
   const out = [];
-  groups.forEach(({areaIds}) => {
+  groups.forEach(({label, areaIds}) => {
     const zones = areaIds.map(id => areaById[id]).filter(Boolean);
     const agg = aggregateTaskAcrossAreas(zones, taskKey);
-    if(!agg.na) out.push(agg);
+    if(!agg.na){
+      // Zone A / Zone B, from the unit label's first letter (e.g. "A05.06" →
+      // 'A', "B05.CORRIDOR" → 'B') — same convention as the exclude picker.
+      agg.zone = String(label).trim().charAt(0).toUpperCase();
+      out.push(agg);
+    }
   });
   return out;
 }
@@ -2324,8 +2329,10 @@ function floorUnitTasksForTrade(floor, taskKey){
 // each unit's own % is first weighted across its zones (Living counts more
 // than a Logia/Yard), THEN the per-unit numbers are averaged for the floor.
 // Ignores N/A units and units excluded from Dashboard %. Null if none apply.
-function floorTradeAvg(floor, taskKey){
-  const units = floorUnitTasksForTrade(floor, taskKey);
+// Pass zoneFilter ('A' or 'B') to average only that zone's units.
+function floorTradeAvg(floor, taskKey, zoneFilter){
+  let units = floorUnitTasksForTrade(floor, taskKey);
+  if(zoneFilter) units = units.filter(u => u.zone === zoneFilter);
   if(units.length === 0) return null;
   const sum = units.reduce((s,u) => s + (Number(u.percentActual)||0), 0);
   return sum / units.length;
@@ -2395,10 +2402,12 @@ function floorTaskDetail(floor, taskKey){
     const finite = arr.filter(Number.isFinite);
     return finite.length ? finite.reduce((a,b)=>a+b,0)/finite.length : null;
   };
+  const zoneAvg = zoneKey => avg(units.filter(u => u.zone === zoneKey).map(u => Number(u.percentActual)||0));
   return {
     planStart, planEnd, ntStart, ntEnd, duration, durationHD,
     planPct: avg(planPcts), planPctHD: avg(planPctsHD),
     actualStart, actualEnd, actualPct: avg(actualPcts),
+    actualPctA: zoneAvg('A'), actualPctB: zoneAvg('B'),
   };
 }
 
@@ -3347,24 +3356,24 @@ function buildDashboardData(){
 }
 
 // Renders the wide "all trades" detail table: one row per floor, with a
-// repeated 9-column group (Plan start/finish, Handong start/finish, Duration,
-// %Plan, Actual start/finish, %completed) per trade. Scrolls horizontally.
+// repeated 13-column group (Plan start/finish, Handong start/finish, Duration,
+// %Plan, Actual start/finish, %completed A/B/Total) per trade. Scrolls horizontally.
 function buildTradeDetailTableHtml(data){
   let html = `<table class="dash-table dash-detail-table"><thead>
     <tr>
       <th rowspan="3" class="floor-col-hdr">Level</th>
-      ${TASKS.map(t=>`<th colspan="11" class="dash-grp-hdr" style="border-bottom-color:${t.color}">
+      ${TASKS.map(t=>`<th colspan="13" class="dash-grp-hdr" style="border-bottom-color:${t.color}">
         <span class="dash-grp-swatch" style="background:${t.color}"></span>${t.name}</th>`).join('')}
     </tr>
     <tr>
-      ${TASKS.map(()=>`<th colspan="8">Plan to complete</th><th colspan="3">Actual</th>`).join('')}
+      ${TASKS.map(()=>`<th colspan="8">Plan to complete</th><th colspan="5">Actual</th>`).join('')}
     </tr>
     <tr>
       ${TASKS.map(()=>`
         <th>Plan start</th><th>Plan finish</th><th>Duration CDT</th>
         <th>Start Handong</th><th>Finish Handong</th><th>Duration HD</th>
         <th>%Plan</th><th>%Plan HD</th>
-        <th>Actual start</th><th>Actual finish</th><th>%completed</th>
+        <th>Actual start</th><th>Actual finish</th><th>%completed A</th><th>%completed B</th><th>%completed Total</th>
       `).join('')}
     </tr>
   </thead><tbody>`;
@@ -3376,7 +3385,7 @@ function buildTradeDetailTableHtml(data){
     </td>`;
     d.detail.forEach(({d:det}) => {
       if(!det){
-        html += `<td class="dash-na">N/A</td>`.repeat(11);
+        html += `<td class="dash-na">N/A</td>`.repeat(13);
       } else {
         html += `<td>${fmtDate(det.planStart)}</td><td>${fmtDate(det.planEnd)}</td>`;
         html += `<td>${det.duration===null?'—':det.duration}</td>`;
@@ -3389,6 +3398,12 @@ function buildTradeDetailTableHtml(data){
           ? `<td class="dash-na">N/A</td>`
           : `<td class="dash-cell" style="background:${pctColor(det.planPctHD)}">${fmtPct(det.planPctHD)}</td>`;
         html += `<td>${fmtDate(det.actualStart)}</td><td>${fmtDate(det.actualEnd)}</td>`;
+        html += det.actualPctA === null
+          ? `<td class="dash-na">N/A</td>`
+          : `<td class="dash-cell" style="background:${pctColor(det.actualPctA)}">${fmtPct(det.actualPctA)}</td>`;
+        html += det.actualPctB === null
+          ? `<td class="dash-na">N/A</td>`
+          : `<td class="dash-cell" style="background:${pctColor(det.actualPctB)}">${fmtPct(det.actualPctB)}</td>`;
         html += det.actualPct === null
           ? `<td class="dash-na">N/A</td>`
           : `<td class="dash-cell" style="background:${pctColor(det.actualPct)}">${fmtPct(det.actualPct)}</td>`;
@@ -3397,7 +3412,7 @@ function buildTradeDetailTableHtml(data){
     html += '</tr>';
   });
 
-  // Total row — project-wide average %Plan / %Plan HD / %completed per trade (dates/duration left blank).
+  // Total row — project-wide average %Plan / %Plan HD / %completed (A/B/Total) per trade (dates/duration left blank).
   html += `<tr class="dash-total-row"><td class="floor-name">Total</td>`;
   TASKS.forEach(t => {
     const dets = data.map(d => d.detail.find(x=>x.key===t.key).d).filter(Boolean);
@@ -3405,11 +3420,14 @@ function buildTradeDetailTableHtml(data){
       const vals = dets.map(x=>x[key]).filter(v=>v!==null);
       return vals.length ? vals.reduce((a,b)=>a+b,0)/vals.length : null;
     };
-    const planAvg = avgOf('planPct'), planHDAvg = avgOf('planPctHD'), actAvg = avgOf('actualPct');
+    const planAvg = avgOf('planPct'), planHDAvg = avgOf('planPctHD');
+    const actAvgA = avgOf('actualPctA'), actAvgB = avgOf('actualPctB'), actAvg = avgOf('actualPct');
     html += `<td></td><td></td><td></td><td></td><td></td><td></td>`;
     html += `<td class="dash-cell dash-overall">${fmtPct(planAvg)}</td>`;
     html += `<td class="dash-cell dash-overall">${fmtPct(planHDAvg)}</td>`;
     html += `<td></td><td></td>`;
+    html += `<td class="dash-cell dash-overall">${fmtPct(actAvgA)}</td>`;
+    html += `<td class="dash-cell dash-overall">${fmtPct(actAvgB)}</td>`;
     html += `<td class="dash-cell dash-overall">${fmtPct(actAvg)}</td>`;
   });
   html += '</tr>';
@@ -3783,7 +3801,7 @@ function pctCell(v){
 // the on-screen Dashboard, as an array-of-arrays for XLSX (2 header rows +
 // data rows + Total row), so the exported Excel matches what's on screen.
 function buildTradeDetailAOA(data){
-  const subCols = ['Plan start','Plan finish','Duration CDT','Start Handong','Finish Handong','Duration HD','%Plan','%Plan HD','Actual start','Actual finish','%completed'];
+  const subCols = ['Plan start','Plan finish','Duration CDT','Start Handong','Finish Handong','Duration HD','%Plan','%Plan HD','Actual start','Actual finish','%completed A','%completed B','%completed Total'];
   const headerRow1 = ['Level'];
   const headerRow2 = [''];
   TASKS.forEach(t => {
@@ -3796,7 +3814,7 @@ function buildTradeDetailAOA(data){
     const row = [d.name];
     d.detail.forEach(({d:det}) => {
       if(!det){
-        row.push('N/A','N/A','N/A','N/A','N/A','N/A','N/A','N/A','N/A','N/A','N/A');
+        row.push('N/A','N/A','N/A','N/A','N/A','N/A','N/A','N/A','N/A','N/A','N/A','N/A','N/A');
       } else {
         row.push(
           det.planStart || '', det.planEnd || '',
@@ -3806,7 +3824,7 @@ function buildTradeDetailAOA(data){
           pctCell(det.planPct),
           pctCell(det.planPctHD),
           det.actualStart || '', det.actualEnd || '',
-          pctCell(det.actualPct)
+          pctCell(det.actualPctA), pctCell(det.actualPctB), pctCell(det.actualPct)
         );
       }
     });
@@ -3821,7 +3839,8 @@ function buildTradeDetailAOA(data){
       const vals = dets.map(x=>x[key]).filter(v => v !== null && Number.isFinite(v));
       return vals.length ? vals.reduce((a,b)=>a+b,0)/vals.length : null;
     };
-    totalRow.push('','','','','','', pctCell(avgOf('planPct')), pctCell(avgOf('planPctHD')), '','', pctCell(avgOf('actualPct')));
+    totalRow.push('','','','','','', pctCell(avgOf('planPct')), pctCell(avgOf('planPctHD')), '','',
+      pctCell(avgOf('actualPctA')), pctCell(avgOf('actualPctB')), pctCell(avgOf('actualPct')));
   });
   rows.push(totalRow);
 
