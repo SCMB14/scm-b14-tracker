@@ -5681,7 +5681,12 @@ function getAreaDisplayColor(area){
    so they don't visually compete with trades that have real progress to
    show. Compare-mode and color-by-task views keep their normal opacity. */
 function getAreaDisplayOpacity(area){
-  if(STATE.toggles.compareMode) return 1;
+  if(STATE.toggles.compareMode){
+    // Same rule as the Dashboard table: only a genuinely N/A trade (not
+    // applicable to this area) renders uncolored. "Not started" (0%) and
+    // every other compare category keep their normal color.
+    return calcCompareCategory(area).key === 'na' ? 0 : 1;
+  }
   if(STATE.toggles.colorByTask && STATE.currentTask !== '__all__'){
     // In color-by-task view we still hide N/A so the user can tell at a glance
     // which areas opted out of this trade.
