@@ -997,6 +997,18 @@
   .dash-na{color:var(--muted);font-family:var(--font-body)}
   .dash-overall{font-weight:700}
   .dash-section-title{font-family:var(--font-display);font-size:13px;letter-spacing:1px;color:var(--accent);margin:14px 0 10px}
+  /* Wide multi-trade detail table: 3-row header, no vertical sticky (table
+     scrolls horizontally inside the modal, which already scrolls vertically
+     as a whole — stacking 3 sticky rows here would overlap/misbehave). */
+  .dash-detail-table th{position:static}
+  .dash-detail-table td{white-space:nowrap;text-align:center}
+  .dash-detail-table td.floor-name{white-space:nowrap;position:sticky;left:0;background:var(--panel);z-index:1}
+  .dash-detail-table th.floor-col-hdr{position:sticky;left:0;background:var(--panel-2);z-index:2}
+  .dash-grp-hdr{border-bottom:3px solid;padding-bottom:6px !important}
+  .dash-grp-swatch{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px}
+  .dash-total-row td{font-weight:700;border-top:2px solid var(--accent)}
+  .dash-total-row td.floor-name{color:var(--accent)}
+  .dash-legend-hint{font-size:10px;color:var(--muted);margin:-10px 0 14px}
 
   .dash-kpi-row{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px}
   .dash-kpi{background:var(--panel-2);border:1px solid var(--border);border-radius:8px;padding:10px 12px}
@@ -2264,6 +2276,76 @@ function floorTradeAvg(floor, taskKey){
   return n === 0 ? null : sum / n;
 }
 
+// Schedule-implied % complete as of STATE.today ("status day"), for an
+// explicit start/end pair. Formula (per project convention):
+//   duration  = finishPlan - startPlan + 1        (inclusive day count)
+//   %Plan     = (statusDay - startPlan + 1) / duration
+// Clamped: statusDay before startPlan → 0%; statusDay after finishPlan → 100%.
+function calcPlanPercentFor(startStr, endStr){
+  if(!startStr || !endStr) return 0;
+  const statusDay = STATE.today;
+  if(dayMs(statusDay) < dayMs(startStr)) return 0;
+  if(dayMs(statusDay) > dayMs(endStr)) return 100;
+  const duration = diffDays(endStr, startStr) + 1;
+  if(duration <= 0) return 100; // degenerate/inverted dates, statusDay already >= start here
+  const elapsed = diffDays(statusDay, startStr) + 1;
+  return Math.max(0, Math.min(100, (elapsed / duration) * 100));
+}
+
+// Aggregate one floor's areas into a single row of dates/% for one trade:
+// Plan start/finish = earliest/latest CDT (Master) plan dates across areas.
+// Handong start/finish = earliest/latest NT (HD-proposed) plan dates.
+// Duration = days between floor Plan start and Plan finish.
+// %Plan = average of each area's schedule-implied % (vs the Master plan).
+// Actual start = earliest actualStart; Actual finish = latest actualEnd, but
+// only shown once EVERY non-N/A area for this trade is itself done (>=100%),
+// so a partial finish date doesn't misrepresent the whole floor.
+// %completed = same average used elsewhere (floorTradeAvg).
+function floorTaskDetail(floor, taskKey){
+  const areas = (floor.areas||[]).filter(a => { ensureAreaTasks(a); const td=a.tasks[taskKey]; return td && !td.na; });
+  if(areas.length === 0) return null;
+  let planStarts=[], planEnds=[], ntStarts=[], ntEnds=[], actualStarts=[], actualEnds=[], planPcts=[], planPctsHD=[], actualPcts=[];
+  let allDone = true;
+  areas.forEach(a => {
+    const td = a.tasks[taskKey];
+    if(td.planStartCDT) planStarts.push(td.planStartCDT);
+    if(td.planEndCDT)   planEnds.push(td.planEndCDT);
+    if(td.planStartNT)  ntStarts.push(td.planStartNT);
+    if(td.planEndNT)    ntEnds.push(td.planEndNT);
+    if(td.actualStart)  actualStarts.push(td.actualStart);
+    if(td.actualEnd)    actualEnds.push(td.actualEnd);
+    // calcPlanPercentFor already returns 0 when a date is missing, so a
+    // not-yet-scheduled area contributes a normal (colored) 0% here — it is
+    // NOT excluded/treated as N/A. The only thing that renders as N/A is a
+    // trade with zero applicable areas at all (handled by the `areas.length
+    // === 0` early return above, via the !td.na filter).
+    planPcts.push(calcPlanPercentFor(td.planStartCDT, td.planEndCDT));
+    planPctsHD.push(calcPlanPercentFor(td.planStartNT, td.planEndNT));
+    const pct = Number(td.percentActual) || 0;
+    actualPcts.push(pct);
+    if(pct < 100) allDone = false;
+  });
+  const earliest = arr => arr.length ? arr.reduce((a,b) => a < b ? a : b) : '';
+  const latest   = arr => arr.length ? arr.reduce((a,b) => a > b ? a : b) : '';
+  const planStart = earliest(planStarts), planEnd = latest(planEnds);
+  const ntStart = earliest(ntStarts), ntEnd = latest(ntEnds);
+  const actualStart = earliest(actualStarts);
+  const actualEnd = (allDone && actualEnds.length === areas.length) ? latest(actualEnds) : '';
+  const durationRawCDT = (planStart && planEnd) ? diffDays(planEnd, planStart) + 1 : null;
+  const duration = Number.isFinite(durationRawCDT) ? durationRawCDT : null;
+  const durationRawHD = (ntStart && ntEnd) ? diffDays(ntEnd, ntStart) + 1 : null;
+  const durationHD = Number.isFinite(durationRawHD) ? durationRawHD : null;
+  const avg = arr => {
+    const finite = arr.filter(Number.isFinite);
+    return finite.length ? finite.reduce((a,b)=>a+b,0)/finite.length : null;
+  };
+  return {
+    planStart, planEnd, ntStart, ntEnd, duration, durationHD,
+    planPct: avg(planPcts), planPctHD: avg(planPctsHD),
+    actualStart, actualEnd, actualPct: avg(actualPcts),
+  };
+}
+
 // Days helpers (UTC midnight to avoid DST drift)
 function dayMs(d){ const x = new Date(d); return Date.UTC(x.getUTCFullYear(), x.getUTCMonth(), x.getUTCDate()); }
 function diffDays(a, b){ return Math.round((dayMs(a) - dayMs(b)) / 86400000); }
@@ -3173,14 +3255,107 @@ function applyManpowerFromCloud(doc){
    END MANPOWER MODULE
 ============================================================= */
 
+// Sort floors for Dashboard display: numbered levels descending (24, 23, ...,
+// 1), with non-numeric labels (e.g. "Roof top", "Tech Floor") kept above the
+// numbered levels, in their original relative order — this doesn't touch
+// STATE.floors itself (which still drives the sidebar / floor nav elsewhere
+// in the app), it's a display-only ordering for the Dashboard.
+function floorSortValue(name){
+  const m = String(name).match(/(\d+)/);
+  return m ? parseInt(m[1], 10) : null;
+}
+function sortFloorsForDashboard(floors){
+  return floors
+    .map((f, i) => ({f, i, v: floorSortValue(f.name)}))
+    .sort((a, b) => {
+      const av = a.v === null ? Infinity : a.v;
+      const bv = b.v === null ? Infinity : b.v;
+      if(av !== bv) return bv - av;
+      return a.i - b.i;
+    })
+    .map(x => x.f);
+}
+
 function buildDashboardData(){
-  // rows: floors; cols: trades + overall
-  return STATE.floors.map(f => ({
+  // rows: floors (sorted highest level → lowest); cols: trades + overall
+  const orderedFloors = sortFloorsForDashboard(STATE.floors);
+  return orderedFloors.map(f => ({
+    id: f.id,
     name: f.name,
     areaCount: (f.areas||[]).length,
     trades: TASKS.map(t => ({key:t.key, val: floorTradeAvg(f, t.key)})),
     overall: floorOverallAvg(f),
+    detail: TASKS.map(t => ({key:t.key, d: floorTaskDetail(f, t.key)})),
   }));
+}
+
+// Renders the wide "all trades" detail table: one row per floor, with a
+// repeated 9-column group (Plan start/finish, Handong start/finish, Duration,
+// %Plan, Actual start/finish, %completed) per trade. Scrolls horizontally.
+function buildTradeDetailTableHtml(data){
+  let html = `<table class="dash-table dash-detail-table"><thead>
+    <tr>
+      <th rowspan="3" class="floor-col-hdr">Level</th>
+      ${TASKS.map(t=>`<th colspan="11" class="dash-grp-hdr" style="border-bottom-color:${t.color}">
+        <span class="dash-grp-swatch" style="background:${t.color}"></span>${t.name}</th>`).join('')}
+    </tr>
+    <tr>
+      ${TASKS.map(()=>`<th colspan="8">Plan to complete</th><th colspan="3">Actual</th>`).join('')}
+    </tr>
+    <tr>
+      ${TASKS.map(()=>`
+        <th>Plan start</th><th>Plan finish</th><th>Duration CDT</th>
+        <th>Start Handong</th><th>Finish Handong</th><th>Duration HD</th>
+        <th>%Plan</th><th>%Plan HD</th>
+        <th>Actual start</th><th>Actual finish</th><th>%completed</th>
+      `).join('')}
+    </tr>
+  </thead><tbody>`;
+
+  data.forEach(d => {
+    html += `<tr><td class="floor-name">${d.name}</td>`;
+    d.detail.forEach(({d:det}) => {
+      if(!det){
+        html += `<td class="dash-na">N/A</td>`.repeat(11);
+      } else {
+        html += `<td>${fmtDate(det.planStart)}</td><td>${fmtDate(det.planEnd)}</td>`;
+        html += `<td>${det.duration===null?'—':det.duration}</td>`;
+        html += `<td>${fmtDate(det.ntStart)}</td><td>${fmtDate(det.ntEnd)}</td>`;
+        html += `<td>${det.durationHD===null?'—':det.durationHD}</td>`;
+        html += det.planPct === null
+          ? `<td class="dash-na">N/A</td>`
+          : `<td class="dash-cell" style="background:${pctColor(det.planPct)}">${fmtPct(det.planPct)}</td>`;
+        html += det.planPctHD === null
+          ? `<td class="dash-na">N/A</td>`
+          : `<td class="dash-cell" style="background:${pctColor(det.planPctHD)}">${fmtPct(det.planPctHD)}</td>`;
+        html += `<td>${fmtDate(det.actualStart)}</td><td>${fmtDate(det.actualEnd)}</td>`;
+        html += det.actualPct === null
+          ? `<td class="dash-na">N/A</td>`
+          : `<td class="dash-cell" style="background:${pctColor(det.actualPct)}">${fmtPct(det.actualPct)}</td>`;
+      }
+    });
+    html += '</tr>';
+  });
+
+  // Total row — project-wide average %Plan / %Plan HD / %completed per trade (dates/duration left blank).
+  html += `<tr class="dash-total-row"><td class="floor-name">Total</td>`;
+  TASKS.forEach(t => {
+    const dets = data.map(d => d.detail.find(x=>x.key===t.key).d).filter(Boolean);
+    const avgOf = key => {
+      const vals = dets.map(x=>x[key]).filter(v=>v!==null);
+      return vals.length ? vals.reduce((a,b)=>a+b,0)/vals.length : null;
+    };
+    const planAvg = avgOf('planPct'), planHDAvg = avgOf('planPctHD'), actAvg = avgOf('actualPct');
+    html += `<td></td><td></td><td></td><td></td><td></td><td></td>`;
+    html += `<td class="dash-cell dash-overall">${fmtPct(planAvg)}</td>`;
+    html += `<td class="dash-cell dash-overall">${fmtPct(planHDAvg)}</td>`;
+    html += `<td></td><td></td>`;
+    html += `<td class="dash-cell dash-overall">${fmtPct(actAvg)}</td>`;
+  });
+  html += '</tr>';
+
+  html += '</tbody></table>';
+  return html;
 }
 
 function renderDashboard(){
@@ -3226,18 +3401,6 @@ function renderDashboard(){
     ? `Forecast project finish: <b>${forecastDate}</b> (linear extrapolation from recent snapshots)`
     : `Take at least one snapshot, then make some progress, to enable forecasting.`;
 
-  // ===== Variance row per floor =====
-  const variancePerFloor = STATE.floors.map(f => {
-    let totalDays = 0, n = 0, worst = null;
-    (f.areas||[]).forEach(a => {
-      const d = calcAreaMaxDelay(a);
-      if(d.days === null) return;
-      totalDays += d.days; n++;
-      if(worst === null || d.days > worst) worst = d.days;
-    });
-    return {floor:f, avg: n?totalDays/n:null, worst};
-  });
-
   // ===== Build HTML =====
   let html = `
     <div class="dash-kpi-row">
@@ -3251,26 +3414,9 @@ function renderDashboard(){
 
     <div class="dash-forecast-note">📈 ${forecastNote}</div>
 
-    <div class="dash-section-title">Average Actual % &amp; delay by floor</div>
-    <div style="overflow-x:auto"><table class="dash-table"><thead><tr>
-      <th>Floor</th><th>Areas</th>
-      ${TASKS.map(t=>`<th>${t.short}<br><span style="font-weight:400;font-size:10px">${t.name}</span></th>`).join('')}
-      <th>Overall</th><th>Avg delay (d)</th><th>Worst (d)</th>
-    </tr></thead><tbody>`;
-
-  data.forEach((d, i) => {
-    const vp = variancePerFloor[i];
-    html += `<tr><td class="floor-name">${d.name}</td><td>${d.areaCount}</td>`;
-    d.trades.forEach(tr => {
-      if(tr.val === null) html += `<td class="dash-na">N/A</td>`;
-      else html += `<td class="dash-cell" style="background:${pctColor(tr.val)}">${fmtPct(tr.val)}</td>`;
-    });
-    html += `<td class="dash-cell dash-overall" style="background:${pctColor(d.overall)}">${fmtPct(d.overall)}</td>`;
-    html += `<td class="${vp.avg===null?'dash-na':''}" style="${vp.avg!==null && vp.avg>3?'color:#ef4444;font-weight:700':''}">${vp.avg===null?'—':(vp.avg>0?'+':'')+vp.avg.toFixed(1)}</td>`;
-    html += `<td class="${vp.worst===null?'dash-na':''}" style="${vp.worst!==null && vp.worst>3?'color:#ef4444;font-weight:700':''}">${vp.worst===null?'—':(vp.worst>0?'+':'')+vp.worst}</td>`;
-    html += '</tr>';
-  });
-  html += '</tbody></table></div>';
+    <div class="dash-section-title">Plan / Handong / Actual by floor — all trades</div>
+    <div style="overflow-x:auto">${buildTradeDetailTableHtml(data)}</div>
+    <div class="dash-legend-hint">Handong = NT (HD-proposed) plan dates. %Plan is schedule-implied progress vs the Master (CDT) plan; %completed is actual reported progress.</div>`;
 
   // ===== Top 10 areas needing attention =====
   const allIssues = [];
@@ -3432,18 +3578,75 @@ function exportFloorPNG(){
   img.src = url;
 }
 
+// Formats a percent value as an Excel cell: 'N/A' for null/NaN, otherwise a
+// rounded whole-number string with a literal '%' so it reads correctly in
+// Excel (plain numbers there show with no % sign).
+function pctCell(v){
+  return (v === null || v === undefined || !Number.isFinite(v)) ? 'N/A' : Math.round(v) + '%';
+}
+
+// Builds the same wide "Plan/Handong/Actual by floor — all trades" table as
+// the on-screen Dashboard, as an array-of-arrays for XLSX (2 header rows +
+// data rows + Total row), so the exported Excel matches what's on screen.
+function buildTradeDetailAOA(data){
+  const subCols = ['Plan start','Plan finish','Duration CDT','Start Handong','Finish Handong','Duration HD','%Plan','%Plan HD','Actual start','Actual finish','%completed'];
+  const headerRow1 = ['Level'];
+  const headerRow2 = [''];
+  TASKS.forEach(t => {
+    headerRow1.push(t.name, ...Array(subCols.length - 1).fill(''));
+    headerRow2.push(...subCols);
+  });
+  const rows = [headerRow1, headerRow2];
+
+  data.forEach(d => {
+    const row = [d.name];
+    d.detail.forEach(({d:det}) => {
+      if(!det){
+        row.push('N/A','N/A','N/A','N/A','N/A','N/A','N/A','N/A','N/A','N/A','N/A');
+      } else {
+        row.push(
+          det.planStart || '', det.planEnd || '',
+          det.duration === null ? '' : det.duration,
+          det.ntStart || '', det.ntEnd || '',
+          det.durationHD === null ? '' : det.durationHD,
+          pctCell(det.planPct),
+          pctCell(det.planPctHD),
+          det.actualStart || '', det.actualEnd || '',
+          pctCell(det.actualPct)
+        );
+      }
+    });
+    rows.push(row);
+  });
+
+  // Total row — same averages as the on-screen table (dates/duration blank).
+  const totalRow = ['Total'];
+  TASKS.forEach(t => {
+    const dets = data.map(d => d.detail.find(x=>x.key===t.key).d).filter(Boolean);
+    const avgOf = key => {
+      const vals = dets.map(x=>x[key]).filter(v => v !== null && Number.isFinite(v));
+      return vals.length ? vals.reduce((a,b)=>a+b,0)/vals.length : null;
+    };
+    totalRow.push('','','','','','', pctCell(avgOf('planPct')), pctCell(avgOf('planPctHD')), '','', pctCell(avgOf('actualPct')));
+  });
+  rows.push(totalRow);
+
+  return {rows, subColsPerTask: subCols.length};
+}
+
 // ---- Export dashboard as Excel ----
 function exportDashboardExcel(){
   const data = buildDashboardData();
-  const rows = data.map((d, idx) => {
+  const rows = data.map((d) => {
     const row = {Floor: d.name, Areas: d.areaCount};
     d.trades.forEach((tr, i) => {
-      row[TASKS[i].short + ' %'] = tr.val === null ? 'N/A' : Math.round(tr.val);
+      row[TASKS[i].short + ' %'] = pctCell(tr.val);
     });
-    row['Overall %'] = d.overall === null ? 'N/A' : Math.round(d.overall);
+    row['Overall %'] = pctCell(d.overall);
     // delay
     let totalDays = 0, n = 0, worst = null;
-    (STATE.floors[idx].areas||[]).forEach(a => {
+    const floorObj = STATE.floors.find(fl => fl.id === d.id);
+    ((floorObj && floorObj.areas) || []).forEach(a => {
       const dl = calcAreaMaxDelay(a);
       if(dl.days !== null){ totalDays += dl.days; n++; if(worst===null||dl.days>worst) worst = dl.days; }
     });
@@ -3455,6 +3658,19 @@ function exportDashboardExcel(){
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Dashboard');
 
+  // Trade Detail sheet — mirrors the on-screen wide table exactly (this is
+  // the piece that used to be missing, causing the app/Excel mismatch).
+  const {rows: detailRows, subColsPerTask} = buildTradeDetailAOA(data);
+  const wsDetail = XLSX.utils.aoa_to_sheet(detailRows);
+  // Merge each task's header cell across its sub-columns (row 1, 0-indexed).
+  wsDetail['!merges'] = wsDetail['!merges'] || [];
+  TASKS.forEach((t, i) => {
+    const startCol = 1 + i * subColsPerTask;
+    const endCol = startCol + subColsPerTask - 1;
+    wsDetail['!merges'].push({s:{r:0,c:startCol}, e:{r:0,c:endCol}});
+  });
+  XLSX.utils.book_append_sheet(wb, wsDetail, 'Trade Detail');
+
   // Top issues sheet
   const issues = [];
   STATE.floors.forEach(f => (f.areas||[]).forEach(a => {
@@ -3465,7 +3681,7 @@ function exportDashboardExcel(){
         Floor: f.name, Area: a.name, Trade: dl.trade.name,
         'Days late': dl.days,
         'Plan End': taskPlanEnd(td) || '',
-        'Actual %': Math.round(Number(td.percentActual)||0),
+        'Actual %': pctCell(Number(td.percentActual)||0),
       });
     }
   }));
@@ -3566,11 +3782,12 @@ function exportDashboardPDF(){
   doc.setDrawColor(200);
   doc.line(14, y, 196, y);
   y += 4;
-  data.forEach((d, i) => {
+  data.forEach((d) => {
     if(y > 270){ doc.addPage(); y = 20; }
     // floor variance
     let totalDays = 0, n = 0;
-    (STATE.floors[i].areas||[]).forEach(a => {
+    const floorObj = STATE.floors.find(fl => fl.id === d.id);
+    ((floorObj && floorObj.areas) || []).forEach(a => {
       const dl = calcAreaMaxDelay(a);
       if(dl.days !== null){ totalDays += dl.days; n++; }
     });
@@ -5463,7 +5680,12 @@ function getAreaDisplayColor(area){
    so they don't visually compete with trades that have real progress to
    show. Compare-mode and color-by-task views keep their normal opacity. */
 function getAreaDisplayOpacity(area){
-  if(STATE.toggles.compareMode) return 1;
+  if(STATE.toggles.compareMode){
+    // Same rule as the Dashboard table: only a genuinely N/A trade (not
+    // applicable to this area) renders uncolored. "Not started" (0%) and
+    // every other compare category keep their normal color.
+    return calcCompareCategory(area).key === 'na' ? 0 : 1;
+  }
   if(STATE.toggles.colorByTask && STATE.currentTask !== '__all__'){
     // In color-by-task view we still hide N/A so the user can tell at a glance
     // which areas opted out of this trade.
