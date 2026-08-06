@@ -1019,6 +1019,7 @@
   .dash-exclude-row:last-child{border-bottom:none}
   .dash-exclude-row:hover{background:var(--panel-2)}
   .dash-exclude-row input{width:16px;height:16px;flex-shrink:0}
+  .dash-exclude-partial{color:var(--muted);font-size:11px}
 
   .dash-kpi-row{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px}
   .dash-kpi{background:var(--panel-2);border:1px solid var(--border);border-radius:8px;padding:10px 12px}
@@ -3412,10 +3413,27 @@ function applyDashExcludeChange(){
   drawDashChart();
   scheduleCloudSave();
 }
+// Groups a floor's areas by apartment/unit (căn), reusing the same naming
+// convention as the "Group by apartment" feature: everything before the
+// first '-' in the area name is the unit id (e.g. "A14.06-LIVING" →
+// "A14.06"). Standalone zones (CORRIDOR — shared circulation, not part of
+// any unit) stay as their own row instead of being grouped.
+function dashGroupAreasByUnit(areas){
+  const groups = new Map(); // unitKey -> {label, areaIds:[]}
+  areas.forEach(a => {
+    const standalone = isStandaloneZone(a.name);
+    const key = standalone ? ('__solo__' + a.id) : apartmentOf(a.name);
+    const label = standalone ? a.name : apartmentOf(a.name);
+    if(!groups.has(key)) groups.set(key, {label, areaIds: []});
+    groups.get(key).areaIds.push(a.id);
+  });
+  return groups;
+}
+
 function renderDashExcludeModal(){
   const f = STATE.floors.find(x => x.id === DASH_EXCLUDE_FLOOR_ID);
   if(!f) return;
-  $('dashExcludeTitle').textContent = `Areas included in % — ${f.name}`;
+  $('dashExcludeTitle').textContent = `Units included in % — ${f.name}`;
   const excluded = new Set(f.dashExcludedAreaIds || []);
   const areas = f.areas || [];
 
@@ -3424,31 +3442,36 @@ function renderDashExcludeModal(){
     return;
   }
 
+  const groups = dashGroupAreasByUnit(areas);
+
   let html = `
-    <div class="dash-exclude-hint">Uncheck an area to leave it out of this floor's Dashboard % (all trades — Waterproofing, Screeding, Tiling, Ceiling Frame, Ceiling Board). This only affects the Dashboard; the floor plan and every other view are unchanged.</div>
+    <div class="dash-exclude-hint">Uncheck a unit to leave it out of this floor's Dashboard % (all trades — Waterproofing, Screeding, Tiling, Ceiling Frame, Ceiling Board). Unchecking a unit excludes all of its zones (Living, WC, Logia, Yard...) at once. This only affects the Dashboard; the floor plan and every other view are unchanged.</div>
     <div class="dash-exclude-actions">
       <button class="btn small" id="dashExcludeAllBtn">Uncheck all</button>
       <button class="btn small" id="dashIncludeAllBtn">Check all</button>
     </div>
     <div class="dash-exclude-list">`;
-  areas.forEach(a => {
-    const checked = !excluded.has(a.id);
+  groups.forEach(({label, areaIds}) => {
+    const includedCount = areaIds.filter(id => !excluded.has(id)).length;
+    const checked = includedCount === areaIds.length;
+    const partial = includedCount > 0 && includedCount < areaIds.length;
     html += `<label class="dash-exclude-row">
-      <input type="checkbox" data-dash-exclude-area="${a.id}" ${checked ? 'checked' : ''}>
-      <span>${a.name}</span>
+      <input type="checkbox" data-dash-exclude-ids="${areaIds.join(',')}" ${checked ? 'checked' : ''} ${partial ? 'data-partial="1"' : ''}>
+      <span>${label}${partial ? ` <span class="dash-exclude-partial">(${includedCount}/${areaIds.length} zones)</span>` : ''}</span>
     </label>`;
   });
   html += `</div>`;
   $('dashExcludeBody').innerHTML = html;
 
-  $('dashExcludeBody').querySelectorAll('[data-dash-exclude-area]').forEach(inp => {
+  $('dashExcludeBody').querySelectorAll('[data-dash-exclude-ids]').forEach(inp => {
+    if(inp.dataset.partial) inp.indeterminate = true;
     inp.addEventListener('change', e => {
-      const areaId = e.target.dataset.dashExcludeArea;
+      const ids = e.target.dataset.dashExcludeIds.split(',');
       if(!f.dashExcludedAreaIds) f.dashExcludedAreaIds = [];
       if(e.target.checked){
-        f.dashExcludedAreaIds = f.dashExcludedAreaIds.filter(id => id !== areaId);
-      } else if(!f.dashExcludedAreaIds.includes(areaId)){
-        f.dashExcludedAreaIds.push(areaId);
+        f.dashExcludedAreaIds = f.dashExcludedAreaIds.filter(id => !ids.includes(id));
+      } else {
+        ids.forEach(id => { if(!f.dashExcludedAreaIds.includes(id)) f.dashExcludedAreaIds.push(id); });
       }
       applyDashExcludeChange();
     });
