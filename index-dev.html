@@ -3326,10 +3326,16 @@ function buildTradeDetailTableHtml(data){
         html += `<td>${det.duration===null?'—':det.duration}</td>`;
         html += `<td>${fmtDate(det.ntStart)}</td><td>${fmtDate(det.ntEnd)}</td>`;
         html += `<td>${det.durationHD===null?'—':det.durationHD}</td>`;
-        html += `<td class="dash-cell" style="background:${pctColor(det.planPct)}">${fmtPct(det.planPct)}</td>`;
-        html += `<td class="dash-cell" style="background:${pctColor(det.planPctHD)}">${fmtPct(det.planPctHD)}</td>`;
+        html += det.planPct === null
+          ? `<td class="dash-na">N/A</td>`
+          : `<td class="dash-cell" style="background:${pctColor(det.planPct)}">${fmtPct(det.planPct)}</td>`;
+        html += det.planPctHD === null
+          ? `<td class="dash-na">N/A</td>`
+          : `<td class="dash-cell" style="background:${pctColor(det.planPctHD)}">${fmtPct(det.planPctHD)}</td>`;
         html += `<td>${fmtDate(det.actualStart)}</td><td>${fmtDate(det.actualEnd)}</td>`;
-        html += `<td class="dash-cell" style="background:${pctColor(det.actualPct)}">${fmtPct(det.actualPct)}</td>`;
+        html += det.actualPct === null
+          ? `<td class="dash-na">N/A</td>`
+          : `<td class="dash-cell" style="background:${pctColor(det.actualPct)}">${fmtPct(det.actualPct)}</td>`;
       }
     });
     html += '</tr>';
