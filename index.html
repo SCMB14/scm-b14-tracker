@@ -2287,7 +2287,7 @@ function rebuildTaskIndex(){
 }
 
 // ===== Dashboard per-floor area inclusion (configurable exclusions) =====
-// Lets the user exclude specific areas (e.g. a corridor, a particular unit)
+// Lets the user exclude specific units (e.g. a corridor, a particular unit)
 // from a floor's Dashboard % calculations, across ALL trades at once. Stored
 // on the floor doc as dashExcludedAreaIds so it syncs like everything else.
 // This ONLY affects Dashboard math (floorTradeAvg / floorTaskDetail below) —
@@ -2297,18 +2297,34 @@ function dashIncludedAreas(floor){
   return (floor.areas || []).filter(a => !excluded.has(a.id));
 }
 
-// Average Actual % across a floor's areas for one trade (ignores N/A areas
-// and areas excluded from Dashboard %). Returns null if no applicable area.
-function floorTradeAvg(floor, taskKey){
-  let sum = 0, n = 0;
-  dashIncludedAreas(floor).forEach(a => {
-    ensureAreaTasks(a);
-    const td = a.tasks[taskKey];
-    if(!td || td.na) return;
-    sum += Number(td.percentActual) || 0;
-    n++;
+// One aggregated (weighted) task-like object per unit for one trade, built
+// with the SAME logic as the "Group by apartment" view (aggregateTaskAcrossAreas,
+// defined further below with ZONE_WEIGHTS: Living=50, WC=30, Yard/Logia/
+// Garden/Master=10 each). Units excluded via the Dashboard picker, or fully
+// N/A for this trade, are left out. Standalone zones (e.g. CORRIDOR) count
+// as their own single-zone "unit".
+function floorUnitTasksForTrade(floor, taskKey){
+  const groups = dashGroupAreasByUnit(dashIncludedAreas(floor));
+  const areaById = {};
+  (floor.areas||[]).forEach(a => { areaById[a.id] = a; });
+  const out = [];
+  groups.forEach(({areaIds}) => {
+    const zones = areaIds.map(id => areaById[id]).filter(Boolean);
+    const agg = aggregateTaskAcrossAreas(zones, taskKey);
+    if(!agg.na) out.push(agg);
   });
-  return n === 0 ? null : sum / n;
+  return out;
+}
+
+// Average Actual % across a floor's UNITS (not raw zones) for one trade —
+// each unit's own % is first weighted across its zones (Living counts more
+// than a Logia/Yard), THEN the per-unit numbers are averaged for the floor.
+// Ignores N/A units and units excluded from Dashboard %. Null if none apply.
+function floorTradeAvg(floor, taskKey){
+  const units = floorUnitTasksForTrade(floor, taskKey);
+  if(units.length === 0) return null;
+  const sum = units.reduce((s,u) => s + (Number(u.percentActual)||0), 0);
+  return sum / units.length;
 }
 
 // Schedule-implied % complete as of STATE.today ("status day"), for an
@@ -2327,36 +2343,37 @@ function calcPlanPercentFor(startStr, endStr){
   return Math.max(0, Math.min(100, (elapsed / duration) * 100));
 }
 
-// Aggregate one floor's areas into a single row of dates/% for one trade:
-// Plan start/finish = earliest/latest CDT (Master) plan dates across areas.
+// Aggregate one floor's UNITS into a single row of dates/% for one trade
+// (same per-unit weighting as floorTradeAvg above, then min/max across units
+// for dates and simple average across units for %Plan/%Plan HD/%completed):
+// Plan start/finish = earliest/latest CDT (Master) plan dates across units.
 // Handong start/finish = earliest/latest NT (HD-proposed) plan dates.
 // Duration = days between floor Plan start and Plan finish.
-// %Plan = average of each area's schedule-implied % (vs the Master plan).
+// %Plan = average of each unit's schedule-implied % (vs the Master plan).
 // Actual start = earliest actualStart; Actual finish = latest actualEnd, but
-// only shown once EVERY non-N/A area for this trade is itself done (>=100%),
-// so a partial finish date doesn't misrepresent the whole floor.
+// only shown once EVERY applicable unit is itself done (>=100%), so a
+// partial finish date doesn't misrepresent the whole floor.
 // %completed = same average used elsewhere (floorTradeAvg).
 function floorTaskDetail(floor, taskKey){
-  const areas = dashIncludedAreas(floor).filter(a => { ensureAreaTasks(a); const td=a.tasks[taskKey]; return td && !td.na; });
-  if(areas.length === 0) return null;
+  const units = floorUnitTasksForTrade(floor, taskKey);
+  if(units.length === 0) return null;
   let planStarts=[], planEnds=[], ntStarts=[], ntEnds=[], actualStarts=[], actualEnds=[], planPcts=[], planPctsHD=[], actualPcts=[];
   let allDone = true;
-  areas.forEach(a => {
-    const td = a.tasks[taskKey];
-    if(td.planStartCDT) planStarts.push(td.planStartCDT);
-    if(td.planEndCDT)   planEnds.push(td.planEndCDT);
-    if(td.planStartNT)  ntStarts.push(td.planStartNT);
-    if(td.planEndNT)    ntEnds.push(td.planEndNT);
-    if(td.actualStart)  actualStarts.push(td.actualStart);
-    if(td.actualEnd)    actualEnds.push(td.actualEnd);
+  units.forEach(u => {
+    if(u.planStartCDT) planStarts.push(u.planStartCDT);
+    if(u.planEndCDT)   planEnds.push(u.planEndCDT);
+    if(u.planStartNT)  ntStarts.push(u.planStartNT);
+    if(u.planEndNT)    ntEnds.push(u.planEndNT);
+    if(u.actualStart)  actualStarts.push(u.actualStart);
+    if(u.actualEnd)    actualEnds.push(u.actualEnd);
     // calcPlanPercentFor already returns 0 when a date is missing, so a
-    // not-yet-scheduled area contributes a normal (colored) 0% here — it is
+    // not-yet-scheduled unit contributes a normal (colored) 0% here — it is
     // NOT excluded/treated as N/A. The only thing that renders as N/A is a
-    // trade with zero applicable areas at all (handled by the `areas.length
-    // === 0` early return above, via the !td.na filter).
-    planPcts.push(calcPlanPercentFor(td.planStartCDT, td.planEndCDT));
-    planPctsHD.push(calcPlanPercentFor(td.planStartNT, td.planEndNT));
-    const pct = Number(td.percentActual) || 0;
+    // trade with zero applicable units at all (handled by the `units.length
+    // === 0` early return above).
+    planPcts.push(calcPlanPercentFor(u.planStartCDT, u.planEndCDT));
+    planPctsHD.push(calcPlanPercentFor(u.planStartNT, u.planEndNT));
+    const pct = Number(u.percentActual) || 0;
     actualPcts.push(pct);
     if(pct < 100) allDone = false;
   });
@@ -2365,7 +2382,7 @@ function floorTaskDetail(floor, taskKey){
   const planStart = earliest(planStarts), planEnd = latest(planEnds);
   const ntStart = earliest(ntStarts), ntEnd = latest(ntEnds);
   const actualStart = earliest(actualStarts);
-  const actualEnd = (allDone && actualEnds.length === areas.length) ? latest(actualEnds) : '';
+  const actualEnd = (allDone && actualEnds.length === units.length) ? latest(actualEnds) : '';
   const durationRawCDT = (planStart && planEnd) ? diffDays(planEnd, planStart) + 1 : null;
   const duration = Number.isFinite(durationRawCDT) ? durationRawCDT : null;
   const durationRawHD = (ntStart && ntEnd) ? diffDays(ntEnd, ntStart) + 1 : null;
