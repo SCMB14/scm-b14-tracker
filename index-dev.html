@@ -2315,16 +2315,13 @@ function floorTaskDetail(floor, taskKey){
     if(td.planEndNT)    ntEnds.push(td.planEndNT);
     if(td.actualStart)  actualStarts.push(td.actualStart);
     if(td.actualEnd)    actualEnds.push(td.actualEnd);
-    // Only count %Plan for areas that actually have that plan set (CDT or
-    // NT/Handong respectively). An area with no dates yet isn't "0% behind
-    // schedule" — it simply has no plan to measure against, so it shouldn't
-    // drag the floor average down.
-    if(td.planStartCDT && td.planEndCDT){
-      planPcts.push(calcPlanPercentFor(td.planStartCDT, td.planEndCDT));
-    }
-    if(td.planStartNT && td.planEndNT){
-      planPctsHD.push(calcPlanPercentFor(td.planStartNT, td.planEndNT));
-    }
+    // calcPlanPercentFor already returns 0 when a date is missing, so a
+    // not-yet-scheduled area contributes a normal (colored) 0% here — it is
+    // NOT excluded/treated as N/A. The only thing that renders as N/A is a
+    // trade with zero applicable areas at all (handled by the `areas.length
+    // === 0` early return above, via the !td.na filter).
+    planPcts.push(calcPlanPercentFor(td.planStartCDT, td.planEndCDT));
+    planPctsHD.push(calcPlanPercentFor(td.planStartNT, td.planEndNT));
     const pct = Number(td.percentActual) || 0;
     actualPcts.push(pct);
     if(pct < 100) allDone = false;
