@@ -1598,6 +1598,15 @@
     .qe-sync.synced{color:#10b981;border-color:#10b98144}
     .qe-sync.error {color:#ef4444;border-color:#ef444466;background:#ef444411}
     @keyframes qe-pulse{0%,100%{opacity:1}50%{opacity:.4}}
+    .qe-undo{
+      height:36px; padding:0 12px;
+      display:flex;align-items:center;justify-content:center;gap:4px;
+      background:transparent;border:1px solid var(--border);
+      border-radius:6px;color:var(--text);
+      font-size:13px;font-weight:600;cursor:pointer;
+      white-space:nowrap;
+    }
+    .qe-undo:disabled{opacity:.35;cursor:default}
     .qe-close{
       width:36px;height:36px;
       display:flex;align-items:center;justify-content:center;
@@ -1868,6 +1877,7 @@
       <span class="qe-sync-dot" id="qeSyncDot"></span>
       <span id="qeSyncText">—</span>
     </div>
+    <button class="qe-undo" id="qeUndoBtn" title="Undo last entry" aria-label="Undo last entry">↺ Undo</button>
     <button class="qe-close" id="qeCloseBtn" aria-label="Close Quick Entry">×</button>
   </div>
   <div class="qe-selectors">
@@ -2046,6 +2056,10 @@
         </button>
       </div>
       <div class="hint" id="modeHint" style="margin-top:6px">Click an area to select it</div>
+      <button class="btn" id="undoBtn" title="Undo last %Actual / Actual date edit (Ctrl+Z)" style="margin-top:8px;width:100%">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-15-6.7L3 13"/></svg>
+        Undo (Ctrl+Z)
+      </button>
     </div>
 
     <!-- DISPLAY TOGGLES -->
@@ -5092,6 +5106,7 @@ function init(){
   document.querySelectorAll('[data-mode]').forEach(b => {
     b.addEventListener('click', () => setMode(b.dataset.mode));
   });
+  $('undoBtn').addEventListener('click', undoLastFieldChange);
 
   // Buttons
   $('loadImageBtn').addEventListener('click', () => $('imageInput').click());
@@ -5464,8 +5479,16 @@ function addCustomTrade(){
   const color = TRADE_PALETTE[(TASKS.length - 5 + TRADE_PALETTE.length) % TRADE_PALETTE.length] || '#eab308';
   TASKS.push({key, name:trimmed, short, color, custom:true});
   rebuildTaskIndex();
-  // make sure every area on every floor has a slot for the new trade
-  STATE.floors.forEach(f => (f.areas||[]).forEach(a => ensureAreaTasks(a)));
+  // Existing areas predate this trade and usually only a handful actually
+  // need it tracked (e.g. "Timber Floor" rarely applies everywhere) — default
+  // them all to N/A so the person only has to switch ON the few areas that
+  // need it, instead of switching OFF everywhere it doesn't apply. Combined
+  // with "full hide" for N/A areas in single-trade view, the new trade's
+  // view starts empty and each area appears as it's turned on.
+  STATE.floors.forEach(f => (f.areas||[]).forEach(a => {
+    ensureAreaTasks(a);
+    if(a.tasks[key]) a.tasks[key].na = true;
+  }));
   buildTaskSelector();
   setCurrentTask(key);
 }
@@ -6328,6 +6351,10 @@ function renderCanvasOnly(){
     const groups = groupAreasByApartment(STATE.areas);
     groups.forEach((zones, aptId) => {
       const agg = makeAggregateArea(zones, aptId);
+      // Same full-hide rule as the per-zone loop below: an apartment whose
+      // aggregate is N/A for the currently viewed single trade is skipped
+      // entirely, not just faded.
+      if(STATE.currentTask !== '__all__' && agg.tasks[STATE.currentTask] && agg.tasks[STATE.currentTask].na) return;
       const color = getAreaDisplayColor(agg);
       aptLabels.push({agg, color});
     });
@@ -6335,9 +6362,18 @@ function renderCanvasOnly(){
 
   STATE.areas.forEach(area => {
     ensureAreaTasks(area);
+    const isSelected = area.id === STATE.selectedId;
+    // Fully hide areas that don't apply to the currently viewed single
+    // trade — not just faded outline-only, skip drawing them entirely, so
+    // browsing one trade only shows what's actually relevant to it. The
+    // selected area is exempt so picking it from the sidebar (e.g. to flip
+    // its N/A flag back off) still shows where it is on the floor plan.
+    if(!isSelected && STATE.currentTask !== '__all__'){
+      const curTd = area.tasks[STATE.currentTask];
+      if(curTd && curTd.na) return;
+    }
     const color = getAreaDisplayColor(area);
     const fillOp = getAreaDisplayOpacity(area);
-    const isSelected = area.id === STATE.selectedId;
 
     // POLYGON (fill = status color of this zone — never affected by grouping)
     const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
@@ -7757,6 +7793,13 @@ function initQuickEntry(){
   if(btn) btn.addEventListener('click', qeOpen);
   const closeBtn = $('qeCloseBtn');
   if(closeBtn) closeBtn.addEventListener('click', qeClose);
+  const undoBtn = $('qeUndoBtn');
+  if(undoBtn) undoBtn.addEventListener('click', () => {
+    undoLastFieldChange();
+    // undoLastFieldChange() already calls the main render(); refresh the
+    // Quick Entry overlay too since it's a separate render cycle.
+    if(QE.open) renderQuickEntry();
+  });
   const fc = $('qeFloorChip');     if(fc) fc.addEventListener('click', () => qeOpenPicker('floor'));
   const uc = $('qeUnitChip');      if(uc) uc.addEventListener('click', () => qeOpenPicker('unit'));
   const tc = $('qeTradeChip');     if(tc) tc.addEventListener('click', () => qeOpenPicker('trade'));
