@@ -2243,7 +2243,7 @@
     <div id="newAreaSuffixChips" class="new-area-suffix-chips"></div>
 
     <label style="margin-top:12px">Applicable trades</label>
-    <div class="modal-hint" style="margin-top:2px">Uncheck any trade that doesn't apply here — it'll be marked N/A right away instead of one by one afterward.</div>
+    <div class="modal-hint" style="margin-top:2px">Check only the trades that actually apply here — everything else is marked N/A automatically.</div>
     <div id="newAreaTaskPicker" class="new-area-task-picker"></div>
 
     <div class="modal-actions">
@@ -4727,7 +4727,16 @@ function makeBlankAreaFrom(a){
     labelOffset: a.labelOffset ? {dx:a.labelOffset.dx, dy:a.labelOffset.dy} : null,
     tasks: {},
   };
-  ensureAreaTasks(na);  // fresh empty tasks
+  ensureAreaTasks(na);  // fresh empty tasks (dates/%/actual all blank)
+  // Carry over which trades apply (N/A flags) from the source area — that's
+  // structural config for this zone (e.g. a Logia doesn't need Ceiling
+  // Board), not per-floor progress data, so it should match the source
+  // instead of resetting to "applicable everywhere" on every copy.
+  if(a.tasks){
+    Object.keys(a.tasks).forEach(k => {
+      if(na.tasks[k] && a.tasks[k]) na.tasks[k].na = !!a.tasks[k].na;
+    });
+  }
   return na;
 }
 
@@ -5845,7 +5854,7 @@ function finishDrawing(){
   renderNewAreaSuffixChips();
   $('newAreaTaskPicker').innerHTML = TASKS.map(t => `
     <label class="new-area-task-row">
-      <input type="checkbox" data-new-area-task="${t.key}" checked>
+      <input type="checkbox" data-new-area-task="${t.key}">
       <span class="new-area-task-dot" style="background:${t.color}"></span>
       <span>${t.name}</span>
     </label>
