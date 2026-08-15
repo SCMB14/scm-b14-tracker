@@ -1131,6 +1131,7 @@
     color:var(--accent);
   }
   .detail-sub{font-size:10px;color:var(--muted);margin-top:2px}
+  .detail-header-actions{display:flex;align-items:center;gap:6px;flex-shrink:0}
   .detail-close{
     background:transparent;border:1px solid var(--border);
     color:var(--muted);width:28px;height:28px;border-radius:6px;
@@ -2224,7 +2225,15 @@
           <div class="detail-title" id="detailTitle">Area</div>
           <div class="detail-sub">Enter Plan / Actual dates &amp; % for each trade</div>
         </div>
-        <button class="detail-close" id="detailClose" title="Close">×</button>
+        <div class="detail-header-actions">
+          <button class="icon-btn" id="detailRenameBtn" title="Rename">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+          </button>
+          <button class="icon-btn" id="detailDuplicateBtn" title="Duplicate (Ctrl+D) — copy this shape to reposition &amp; rename">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          </button>
+          <button class="detail-close" id="detailClose" title="Close">×</button>
+        </div>
       </div>
       <div class="detail-tabs" id="detailTabs"></div>
       <div class="detail-body" id="detailBody"></div>
@@ -5332,6 +5341,14 @@ function init(){
   updateTaskIndicator();
   setupAreaListDelegation();
   $('detailClose').addEventListener('click', closeDetailPanel);
+  $('detailRenameBtn').addEventListener('click', () => {
+    const area = STATE.areas.find(a => a.id === STATE.selectedId);
+    if(area) openRenameModal(area);
+  });
+  $('detailDuplicateBtn').addEventListener('click', () => {
+    const area = STATE.areas.find(a => a.id === STATE.selectedId);
+    if(area) duplicateArea(area);
+  });
 }
 
 /* =============================================================
@@ -5708,6 +5725,29 @@ function onMouseDown(e){
     return;
   }
 
+  // Ctrl/Cmd + press-drag on ANY area's body (selected or not): duplicate
+  // it in place and immediately arm a drag of the COPY. Much faster than
+  // clicking the Duplicate button then separately dragging into position.
+  const bodyHitForCopy = e.target.closest('.polygon-shape');
+  if(bodyHitForCopy && e.button === 0 && STATE.mode === 'select' && ROLE.isAdmin() && (e.ctrlKey || e.metaKey)){
+    const srcArea = STATE.areas.find(a => a.id === bodyHitForCopy.dataset.id);
+    if(srcArea){
+      const copy = makeBlankAreaFrom(srcArea);
+      STATE.areas.push(copy);
+      STATE.selectedId = copy.id;
+      render();
+      const p0 = screenToImg(e.clientX, e.clientY);
+      STATE.areaDrag = {
+        areaId: copy.id,
+        lastX: p0.x, lastY: p0.y,
+        moved: false,
+        isDuplicate: true,
+      };
+      e.preventDefault();
+      return;
+    }
+  }
+
   // Vertex handle drag takes priority (select mode, on a selected area's corner)
   // Admin only — non-admins can still click polygons to inspect but can't reshape.
   const handle = e.target.closest('.vertex-handle');
@@ -5842,7 +5882,18 @@ function onMouseUp(e){
   // Finish whole-area drag
   if(STATE.areaDrag){
     const moved = STATE.areaDrag.moved;
+    const wasDuplicate = STATE.areaDrag.isDuplicate;
+    const draggedId = STATE.areaDrag.areaId;
     STATE.areaDrag = null;
+    if(wasDuplicate){
+      // Whether they dragged it somewhere or just clicked (no move), the
+      // duplicate exists now — open rename right away so the natural next
+      // step (type the new name) doesn't need an extra click to find it.
+      renderCanvasOnly();
+      const area = STATE.areas.find(a => a.id === draggedId);
+      if(area) openRenameModal(area);
+      return;
+    }
     if(moved){ renderCanvasOnly(); return; }
     // if it didn't move, fall through so it counts as a normal click (no-op here)
   }
