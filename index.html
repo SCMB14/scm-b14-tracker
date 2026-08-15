@@ -2079,10 +2079,6 @@
           <span>Color by Task (not Status)</span>
           <div class="toggle" data-toggle="colorByTask"></div>
         </div>
-        <div class="toggle-row" title="Areas already at 100% Actual (for the current task/view) render outline-only, no fill — so color only draws your eye to work still in progress.">
-          <span>🎯 Only color unfinished (&lt;100%)</span>
-          <div class="toggle" data-toggle="hideCompletedColor"></div>
-        </div>
         <div class="toggle-row" title="Group zones from the same apartment (e.g. A14.06-LIVING, A14.06-WC1, A14.06-YARD) into one label on the canvas. The sidebar still shows each zone individually.">
           <span>🏠 Group by apartment</span>
           <div class="toggle" data-toggle="groupByApartment"></div>
@@ -4137,7 +4133,6 @@ const STATE = {
     colorByTask: false,
     compareMode: false,
     groupByApartment: false,
-    hideCompletedColor: false,
   },
   cutoffDate: '',
   labelScale: 1,   // user-adjustable label size multiplier
@@ -5899,31 +5894,12 @@ function getAreaDisplayColor(area){
   return calcAreaCurrentStatus(area).color;
 }
 
-// True when the area is 100% Actual for whatever the canvas is currently
-// showing: the active single task, or — in "All Tasks" view — every
-// applicable (non-N/A) task. Used by the "Only color unfinished" toggle.
-function isAreaDoneForCurrentView(area){
-  ensureAreaTasks(area);
-  if(STATE.currentTask === '__all__'){
-    const applicable = TASKS.filter(t => !area.tasks[t.key].na);
-    if(applicable.length === 0) return false;
-    return applicable.every(t => Number(area.tasks[t.key].percentActual) >= 100);
-  }
-  const td = area.tasks[STATE.currentTask];
-  if(!td || td.na) return false;
-  return Number(td.percentActual) >= 100;
-}
-
 /* Returns the fill-opacity multiplier for an area in the current view.
    N/A (the active trade is N/A, or aggregate-N/A across all trades) and
    Future (plan hasn't started yet) render fully transparent — outline only —
    so they don't visually compete with trades that have real progress to
    show. Compare-mode and color-by-task views keep their normal opacity. */
 function getAreaDisplayOpacity(area){
-  // "Only color unfinished" overrides every other mode below: once an area
-  // hits 100% for the current view, it goes outline-only regardless of
-  // whether status color, color-by-task, or compare mode is active.
-  if(STATE.toggles.hideCompletedColor && isAreaDoneForCurrentView(area)) return 0;
   if(STATE.toggles.compareMode){
     // Same rule as the Dashboard table: only a genuinely N/A trade (not
     // applicable to this area) renders uncolored. "Not started" (0%) and
@@ -6308,13 +6284,6 @@ function renderExternalLabel(area, statusColor){
     if(td && td.na) return;
   }
 
-  // === "Only color unfinished" also hides fully-done labels (v46) ===
-  // Single-task view: the active task is done → nothing left to flag, skip.
-  // All-Tasks view: every applicable task is done → skip the whole label
-  // (per-task rows for a MIX of done/unfinished tasks are filtered further
-  // down instead, so only the unfinished ones get drawn).
-  if(STATE.toggles.hideCompletedColor && isAreaDoneForCurrentView(area)) return;
-
   // === DYNAMIC LABEL WIDTH (v44 iter 3) ===
   // Pre-build every visible string and MEASURE its width with the canvas
   // measurer so the box fits content exactly. The earlier char-ratio
@@ -6338,7 +6307,6 @@ function renderExternalLabel(area, statusColor){
     TASKS.forEach(taskDef => {
       const td = area.tasks[taskDef.key];
       if(td.na) return;
-      if(STATE.toggles.hideCompletedColor && (Number(td.percentActual)||0) >= 100) return;
       const ts = calcTaskStatus(td);
       const planPct = Math.round(calcPlanPercent(td));
       const actPct = Math.round(Number(td.percentActual)||0);
@@ -6495,8 +6463,6 @@ function renderExternalLabel(area, statusColor){
       const taskData = area.tasks[taskDef.key];
       // Skip N/A tasks entirely — no row drawn for them.
       if(taskData.na) return;
-      // Skip already-done tasks too when "Only color unfinished" is on.
-      if(STATE.toggles.hideCompletedColor && (Number(taskData.percentActual)||0) >= 100) return;
       const ts = calcTaskStatus(taskData);
       const planPct = Math.round(calcPlanPercent(taskData));
       const actPct = Math.round(Number(taskData.percentActual)||0);
