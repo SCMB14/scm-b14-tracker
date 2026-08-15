@@ -837,6 +837,14 @@
     margin-bottom:12px;
     line-height:1.5;
   }
+  .new-area-task-picker{display:flex;flex-direction:column;gap:6px;margin-bottom:12px}
+  .new-area-task-row{display:flex;align-items:center;gap:8px;padding:6px 10px;border:1px solid var(--border);border-radius:6px;cursor:pointer;font-size:13px}
+  .new-area-task-row:hover{background:var(--panel-2)}
+  .new-area-task-row input{width:16px;height:16px;flex-shrink:0}
+  .new-area-task-dot{width:9px;height:9px;border-radius:2px;flex-shrink:0}
+  .new-area-suffix-chips{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 12px}
+  .new-area-suffix-chip{padding:4px 10px;border:1px solid var(--border);border-radius:14px;font-size:11px;font-family:var(--font-mono);background:var(--panel-2);color:var(--text);cursor:pointer}
+  .new-area-suffix-chip:hover{border-color:var(--accent);color:var(--accent)}
 
   .empty-state{
     text-align:center;
@@ -1590,6 +1598,15 @@
     .qe-sync.synced{color:#10b981;border-color:#10b98144}
     .qe-sync.error {color:#ef4444;border-color:#ef444466;background:#ef444411}
     @keyframes qe-pulse{0%,100%{opacity:1}50%{opacity:.4}}
+    .qe-undo{
+      height:36px; padding:0 12px;
+      display:flex;align-items:center;justify-content:center;gap:4px;
+      background:transparent;border:1px solid var(--border);
+      border-radius:6px;color:var(--text);
+      font-size:13px;font-weight:600;cursor:pointer;
+      white-space:nowrap;
+    }
+    .qe-undo:disabled{opacity:.35;cursor:default}
     .qe-close{
       width:36px;height:36px;
       display:flex;align-items:center;justify-content:center;
@@ -1859,6 +1876,7 @@
       <span class="qe-sync-dot" id="qeSyncDot"></span>
       <span id="qeSyncText">—</span>
     </div>
+    <button class="qe-undo" id="qeUndoBtn" title="Undo last entry" aria-label="Undo last entry">↺ Undo</button>
     <button class="qe-close" id="qeCloseBtn" aria-label="Close Quick Entry">×</button>
   </div>
   <div class="qe-selectors">
@@ -2007,10 +2025,11 @@
         <button class="floor-btn danger" id="delFloorBtn">Delete</button>
       </div>
       <button class="floor-btn wide" id="copyAreasBtn">📋 Copy areas to floors…</button>
+      <button class="floor-btn wide" id="copyTradeNABtn">🎯 Copy N/A (current trade) to other floors…</button>
       <button class="floor-btn wide" id="cleanupFloorsBtn" style="margin-top:6px;border-color:#ef4444;color:#ef4444">🧹 Cleanup empty floors</button>
       <button class="floor-btn wide" id="resetHistoryBtn" style="margin-top:6px;border-color:#ef4444;color:#ef4444">🗑 Reset plan history</button>
       <button class="floor-btn wide" id="reloadCloudBtn" style="margin-top:6px;border-color:#3b82f6;color:#3b82f6">🔄 Force reload from cloud</button>
-      <div class="hint" style="margin-top:6px">Each floor keeps its own progress &amp; plan image. After "+ Add", use <b>Load Plan</b> (top bar) to upload an image or PDF for that floor. "Copy areas" copies only shapes (names &amp; outlines), not dates/%.</div>
+      <div class="hint" style="margin-top:6px">Each floor keeps its own progress &amp; plan image. After "+ Add", use <b>Load Plan</b> (top bar) to upload an image or PDF for that floor. "Copy areas" copies only shapes (names &amp; outlines), not dates/%. "Copy N/A" only updates the currently-viewed trade's applicable/N/A flag on areas that already exist on other floors (matched by name) — no shapes, no other trades, no progress data touched.</div>
     </div>
 
     <!-- TASK SELECTOR -->
@@ -2037,6 +2056,10 @@
         </button>
       </div>
       <div class="hint" id="modeHint" style="margin-top:6px">Click an area to select it</div>
+      <button class="btn" id="undoBtn" title="Undo last %Actual / Actual date edit (Ctrl+Z)" style="margin-top:8px;width:100%">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-15-6.7L3 13"/></svg>
+        Undo (Ctrl+Z)
+      </button>
     </div>
 
     <!-- DISPLAY TOGGLES -->
@@ -2078,6 +2101,10 @@
         <div class="toggle-row">
           <span>Color by Task (not Status)</span>
           <div class="toggle" data-toggle="colorByTask"></div>
+        </div>
+        <div class="toggle-row" title="Areas already at 100% Actual (for the current task/view) render outline-only, no fill — so color only draws your eye to work still in progress.">
+          <span>🎯 Only color unfinished (&lt;100%)</span>
+          <div class="toggle" data-toggle="hideCompletedColor"></div>
         </div>
         <div class="toggle-row" title="Group zones from the same apartment (e.g. A14.06-LIVING, A14.06-WC1, A14.06-YARD) into one label on the canvas. The sidebar still shows each zone individually.">
           <span>🏠 Group by apartment</span>
@@ -2213,6 +2240,11 @@
     </div>
     <label>Area Name / ID</label>
     <input type="text" id="areaNameInput" placeholder="e.g. 10F-A05, Apt-B05" autocomplete="off">
+    <div id="newAreaSuffixChips" class="new-area-suffix-chips"></div>
+
+    <label style="margin-top:12px">Applicable trades</label>
+    <div class="modal-hint" style="margin-top:2px">Check only the trades that actually apply here — everything else is marked N/A automatically.</div>
+    <div id="newAreaTaskPicker" class="new-area-task-picker"></div>
 
     <div class="modal-actions">
       <button class="btn" id="modalCancel">Cancel</button>
@@ -4133,6 +4165,7 @@ const STATE = {
     colorByTask: false,
     compareMode: false,
     groupByApartment: false,
+    hideCompletedColor: false,
   },
   cutoffDate: '',
   labelScale: 1,   // user-adjustable label size multiplier
@@ -4532,6 +4565,79 @@ async function deleteFloor(){
 
 // Copy only the SHAPES (points, name, labelOffset) of current floor's areas
 // to chosen target floors. Progress data (dates/%/na) is NOT copied.
+// Normalizes an area name for cross-floor matching by stripping the floor
+// number that immediately follows the zone letter — "A04.06-WC1" and
+// "A05.06-WC1" both become "A.06-WC1", the same physical unit/zone one
+// floor apart. Areas with no leading "A"/"B" + digits pattern (or "UPPER"
+// duplex zones, which are inherently tied to a specific floor pair) fall
+// back to the raw uppercased name, so they simply won't cross-match — an
+// acceptable limitation rather than a wrong guess.
+function areaMatchKey(name){
+  if(!name) return '';
+  const up = name.trim().toUpperCase();
+  const m = up.match(/^([AB])\d+(.*)$/);
+  if(m && !up.includes('UPPER')) return m[1] + m[2];
+  return up;
+}
+
+// Copies ONLY the currently-viewed trade's N/A (applicable/not) flag from
+// this floor's areas onto EXISTING areas with a matching name on other
+// floors. Does not touch shapes, other trades, or any progress data (dates,
+// %, actual). Areas with no name match on a target floor are left alone.
+function copyTradeNAToFloors(){
+  if(STATE.currentTask === '__all__'){
+    alert('Pick a specific trade first (not "All Tasks") — this copies the N/A flag for whichever trade is currently selected.');
+    return;
+  }
+  const trade = TASK_BY_KEY[STATE.currentTask];
+  const src = currentFloor();
+  if(!src) return;
+  if(src.areas.length === 0){ alert('This floor has no areas.'); return; }
+  const targets = STATE.floors.filter(f => f.id !== src.id);
+  if(targets.length === 0){ alert('Add more floors first.'); return; }
+
+  const list = targets.map((f, i) => `${i+1}. ${f.name}`).join('\n');
+  const ans = prompt(
+    `Copy "${trade.name}" N/A status from "${src.name}" to which floors? (matched by area name, floor number ignored)\n\n${list}\n\nEnter numbers separated by commas (e.g. 1,2,3), or "all":`,
+    'all'
+  );
+  if(ans === null) return;
+
+  let chosen;
+  if(ans.trim().toLowerCase() === 'all'){
+    chosen = targets;
+  } else {
+    const nums = ans.split(',').map(s => parseInt(s.trim(),10)).filter(n => !isNaN(n));
+    chosen = nums.map(n => targets[n-1]).filter(Boolean);
+  }
+  if(chosen.length === 0){ alert('No valid floors selected.'); return; }
+
+  // Build the source's key -> na map for this trade only.
+  const srcMap = new Map();
+  src.areas.forEach(a => {
+    ensureAreaTasks(a);
+    const td = a.tasks[STATE.currentTask];
+    if(td) srcMap.set(areaMatchKey(a.name), !!td.na);
+  });
+
+  let updated = 0, unmatched = 0;
+  chosen.forEach(tf => {
+    (tf.areas||[]).forEach(a => {
+      const key = areaMatchKey(a.name);
+      if(srcMap.has(key)){
+        ensureAreaTasks(a);
+        const td = a.tasks[STATE.currentTask];
+        if(td){ td.na = srcMap.get(key); updated++; }
+      } else {
+        unmatched++;
+      }
+    });
+  });
+
+  render();
+  alert(`Updated "${trade.name}" N/A status on ${updated} matching area(s) across ${chosen.length} floor(s).\n${unmatched} area(s) had no matching name and were left unchanged.`);
+}
+
 function copyAreasToFloors(){
   const src = currentFloor();
   if(!src) return;
@@ -4694,7 +4800,16 @@ function makeBlankAreaFrom(a){
     labelOffset: a.labelOffset ? {dx:a.labelOffset.dx, dy:a.labelOffset.dy} : null,
     tasks: {},
   };
-  ensureAreaTasks(na);  // fresh empty tasks
+  ensureAreaTasks(na);  // fresh empty tasks (dates/%/actual all blank)
+  // Carry over which trades apply (N/A flags) from the source area — that's
+  // structural config for this zone (e.g. a Logia doesn't need Ceiling
+  // Board), not per-floor progress data, so it should match the source
+  // instead of resetting to "applicable everywhere" on every copy.
+  if(a.tasks){
+    Object.keys(a.tasks).forEach(k => {
+      if(na.tasks[k] && a.tasks[k]) na.tasks[k].na = !!a.tasks[k].na;
+    });
+  }
   return na;
 }
 
@@ -4755,6 +4870,67 @@ function ensureAreaTasks(a){
   });
   // per-area label position offset (for drag-to-move). null = auto position.
   if(a.labelOffset === undefined) a.labelOffset = null;
+}
+
+// ===== Actual-data edit history + undo (v46) =====
+// Every edit to %Actual / Actual Start / Actual End gets recorded, no
+// matter who makes it (contractors included) — so a mistake can be found
+// and fixed later. Recording always happens; VIEWING the trail and using
+// the restore button is Admin-only (see buildRevisionsHtml). Ctrl+Z is
+// available to whoever is typing, as a quick in-session undo of the last
+// edit to any of these 3 fields on any area.
+let UNDO_STACK = [];
+function recordActualFieldChange(area, taskKey, field, oldValue, newValue){
+  if(oldValue === newValue) return;
+  ensureAreaTasks(area);
+  const td = area.tasks[taskKey];
+  if(!td) return;
+  const histKey = field + 'History';
+  (td[histKey] = td[histKey] || []).push(oldValue);
+  if(td[histKey].length > 30) td[histKey].shift();   // cap growth
+  const floor = currentFloor();
+  UNDO_STACK.push({floorId: floor ? floor.id : null, areaId: area.id, taskKey, field, oldValue, newValue});
+  if(UNDO_STACK.length > 50) UNDO_STACK.shift();
+}
+function undoLastFieldChange(){
+  const entry = UNDO_STACK.pop();
+  if(!entry) return false;
+  const floor = STATE.floors.find(f => f.id === entry.floorId);
+  if(!floor) return false;
+  const area = (floor.areas||[]).find(a => a.id === entry.areaId);
+  if(!area) return false;
+  ensureAreaTasks(area);
+  const td = area.tasks[entry.taskKey];
+  if(!td) return false;
+  td[entry.field] = entry.oldValue;
+  // Pop the entry we just pushed to the field's display history too, so
+  // this undo doesn't itself show up as a fake extra revision.
+  const histKey = entry.field + 'History';
+  if(Array.isArray(td[histKey]) && td[histKey].length) td[histKey].pop();
+  if(STATE.currentFloorId !== entry.floorId) STATE.currentFloorId = entry.floorId;
+  STATE.selectedId = entry.areaId;
+  render();
+  return true;
+}
+// Admin-only restore of a field to its immediately-previous recorded value
+// (used by the "↺" button in the revisions box — separate from Ctrl+Z so
+// an Admin can fix a mistake days later, not just in the same session).
+function restorePreviousFieldValue(area, taskKey, field){
+  if(!ROLE.isAdmin()) return false;
+  ensureAreaTasks(area);
+  const td = area.tasks[taskKey];
+  const histKey = field + 'History';
+  const hist = td[histKey];
+  if(!Array.isArray(hist) || hist.length === 0) return false;
+  const restored = hist.pop();
+  const current = td[field];
+  td[field] = restored;
+  // Record the restore itself as a new change too, so it can be Ctrl+Z'd
+  // or seen in the trail like any other edit.
+  const floorLocal = currentFloor();
+  UNDO_STACK.push({floorId: floorLocal ? floorLocal.id : null, areaId: area.id, taskKey, field, oldValue: current, newValue: restored});
+  if(UNDO_STACK.length > 50) UNDO_STACK.shift();
+  return true;
 }
 
 /* ===== ROLE / PERSPECTIVE =====
@@ -4942,6 +5118,7 @@ function init(){
   $('dupFloorBtn').addEventListener('click', duplicateFloor);
   $('delFloorBtn').addEventListener('click', deleteFloor);
   $('copyAreasBtn').addEventListener('click', copyAreasToFloors);
+  $('copyTradeNABtn').addEventListener('click', copyTradeNAToFloors);
   $('cleanupFloorsBtn').addEventListener('click', cleanupEmptyFloors);
   $('resetHistoryBtn').addEventListener('click', resetPlanHistory);
 
@@ -5012,6 +5189,7 @@ function init(){
   document.querySelectorAll('[data-mode]').forEach(b => {
     b.addEventListener('click', () => setMode(b.dataset.mode));
   });
+  $('undoBtn').addEventListener('click', undoLastFieldChange);
 
   // Buttons
   $('loadImageBtn').addEventListener('click', () => $('imageInput').click());
@@ -5136,6 +5314,12 @@ function init(){
     } else if(e.key >= '1' && e.key <= String(TASKS.length)){
       // 1-5 to switch task
       setCurrentTask(TASKS[parseInt(e.key)-1].key);
+    } else if((e.ctrlKey || e.metaKey) && !e.shiftKey && (e.key === 'z' || e.key === 'Z')){
+      // Undo the last %Actual / Actual Start / Actual End edit (any area,
+      // this session). Skipped automatically while typing in an input,
+      // since the whole handler already returns early for that (line above).
+      e.preventDefault();
+      undoLastFieldChange();
     }
   });
 
@@ -5200,20 +5384,33 @@ function setupAreaListDelegation(){
     if(!inp) return;
     if(STATE.currentTask === '__all__') return;
     const f = inp.dataset.field;
-    if(f !== 'planStart' && f !== 'planEnd') return;  // only plan dates get history
     const area = findAreaFromEvent(e);
     if(!area) return;
     ensureAreaTasks(area);
     const td = area.tasks[STATE.currentTask];
     const prev = inp.dataset.prevValue || '';
     const now = inp.value;
-    if(prev && prev !== now){
-      const histKey = (f === 'planStart') ? planFields().startHist : planFields().endHist;
-      (td[histKey] = td[histKey] || []).push(prev);
-      // refresh the revisions box (full sidebar rebuild is fine on commit)
-      const card = inp.closest('.area-card');
-      const revBox = card.querySelector('.revisions-box');
-      if(revBox) revBox.innerHTML = buildRevisionsHtml(td);
+    if(f === 'planStart' || f === 'planEnd'){
+      if(prev && prev !== now){
+        const histKey = (f === 'planStart') ? planFields().startHist : planFields().endHist;
+        (td[histKey] = td[histKey] || []).push(prev);
+        // refresh the revisions box (full sidebar rebuild is fine on commit)
+        const card = inp.closest('.area-card');
+        const revBox = card.querySelector('.revisions-box');
+        if(revBox) revBox.innerHTML = buildRevisionsHtml(td);
+      }
+    } else if(f === 'percentActual' || f === 'actualStart' || f === 'actualEnd'){
+      let prevVal = prev, nowVal = now;
+      if(f === 'percentActual'){
+        prevVal = prev === '' ? 0 : Number(prev);
+        nowVal = now === '' ? 0 : Number(now);
+      }
+      if(prevVal !== nowVal){
+        recordActualFieldChange(area, STATE.currentTask, f, prevVal, nowVal);
+        const card = inp.closest('.area-card');
+        const revBox = card.querySelector('.revisions-box');
+        if(revBox) revBox.innerHTML = buildRevisionsHtml(td);
+      }
     }
     inp.dataset.prevValue = now;
     renderCanvasOnly();
@@ -5250,6 +5447,21 @@ function setupAreaListDelegation(){
         area.tasks[STATE.currentTask][clearBtn.dataset.clearhist + 'History'] = [];
         renderSidebar();
         renderCanvasOnly();
+      }
+      return;
+    }
+    // Actual-field restore button (Admin only — button only renders for Admin)
+    const restoreBtn = e.target.closest('[data-restore-field]');
+    if(restoreBtn){
+      e.stopPropagation();
+      const area = findAreaFromEvent(e);
+      if(area && STATE.currentTask !== '__all__'){
+        if(restorePreviousFieldValue(area, STATE.currentTask, restoreBtn.dataset.restoreField)){
+          renderSidebar();
+          renderCanvasOnly();
+          renderStats();
+          updateTaskCounts();
+        }
       }
       return;
     }
@@ -5350,8 +5562,16 @@ function addCustomTrade(){
   const color = TRADE_PALETTE[(TASKS.length - 5 + TRADE_PALETTE.length) % TRADE_PALETTE.length] || '#eab308';
   TASKS.push({key, name:trimmed, short, color, custom:true});
   rebuildTaskIndex();
-  // make sure every area on every floor has a slot for the new trade
-  STATE.floors.forEach(f => (f.areas||[]).forEach(a => ensureAreaTasks(a)));
+  // Existing areas predate this trade and usually only a handful actually
+  // need it tracked (e.g. "Timber Floor" rarely applies everywhere) — default
+  // them all to N/A so the person only has to switch ON the few areas that
+  // need it, instead of switching OFF everywhere it doesn't apply. Combined
+  // with "full hide" for N/A areas in single-trade view, the new trade's
+  // view starts empty and each area appears as it's turned on.
+  STATE.floors.forEach(f => (f.areas||[]).forEach(a => {
+    ensureAreaTasks(a);
+    if(a.tasks[key]) a.tasks[key].na = true;
+  }));
   buildTaskSelector();
   setCurrentTask(key);
 }
@@ -5669,6 +5889,28 @@ function onMouseUp(e){
 /* =============================================================
    DRAWING
 ============================================================= */
+// Session memory of the last saved area's unit prefix (e.g. "A06.01" from
+// "A06.01-LIVING"), so drawing several zones in the same unit back-to-back
+// only needs the suffix typed/clicked each time, not the whole name.
+let LAST_AREA_PREFIX = { floorId: null, prefix: '' };
+const AREA_SUFFIX_SUGGESTIONS = ['LIVING','WC','WC1','WC2','YARD','LOGIA','GARDEN','MASTER','CORRIDOR'];
+
+function renderNewAreaSuffixChips(){
+  $('newAreaSuffixChips').innerHTML = AREA_SUFFIX_SUGGESTIONS.map(s =>
+    `<button type="button" class="new-area-suffix-chip" data-suffix="${s}">${s}</button>`
+  ).join('');
+  $('newAreaSuffixChips').querySelectorAll('[data-suffix]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const inp = $('areaNameInput');
+      const current = inp.value;
+      const dashIdx = current.indexOf('-');
+      const prefix = dashIdx >= 0 ? current.slice(0, dashIdx) : current;
+      inp.value = prefix ? `${prefix}-${btn.dataset.suffix}` : btn.dataset.suffix;
+      inp.focus();
+    });
+  });
+}
+
 function finishDrawing(){
   if(STATE.drawingPoints.length < 3){
     STATE.drawingPoints = [];
@@ -5677,9 +5919,26 @@ function finishDrawing(){
   }
   STATE.editingPending = { points: STATE.drawingPoints.slice() };
   STATE.drawingPoints = [];
-  $('areaNameInput').value = '';
+  // Pre-fill the last-used unit prefix (same floor only) so consecutive
+  // zones in the same unit just need a suffix typed or clicked.
+  const floorId = currentFloor() ? currentFloor().id : null;
+  $('areaNameInput').value = (LAST_AREA_PREFIX.floorId === floorId && LAST_AREA_PREFIX.prefix)
+    ? LAST_AREA_PREFIX.prefix + '-'
+    : '';
+  renderNewAreaSuffixChips();
+  $('newAreaTaskPicker').innerHTML = TASKS.map(t => `
+    <label class="new-area-task-row">
+      <input type="checkbox" data-new-area-task="${t.key}">
+      <span class="new-area-task-dot" style="background:${t.color}"></span>
+      <span>${t.name}</span>
+    </label>
+  `).join('');
   $('nameModal').classList.add('show');
-  setTimeout(() => $('areaNameInput').focus(), 50);
+  setTimeout(() => {
+    const inp = $('areaNameInput');
+    inp.focus();
+    inp.setSelectionRange(inp.value.length, inp.value.length);
+  }, 50);
 }
 
 function cancelModal(){
@@ -5698,8 +5957,19 @@ function saveModalArea(){
     tasks: {}
   };
   ensureAreaTasks(newArea);
+  // Any trade left unchecked in the picker doesn't apply to this area —
+  // mark it N/A right away instead of making the user toggle it by hand
+  // afterward for every trade that isn't relevant.
+  $('newAreaTaskPicker').querySelectorAll('[data-new-area-task]').forEach(inp => {
+    if(!inp.checked){
+      const key = inp.dataset.newAreaTask;
+      if(newArea.tasks[key]) newArea.tasks[key].na = true;
+    }
+  });
   STATE.areas.push(newArea);
   STATE.selectedId = id;
+  const floorId = currentFloor() ? currentFloor().id : null;
+  LAST_AREA_PREFIX = { floorId, prefix: apartmentOf(name) };
   $('nameModal').classList.remove('show');
   STATE.editingPending = null;
   setMode('select');
@@ -5894,12 +6164,35 @@ function getAreaDisplayColor(area){
   return calcAreaCurrentStatus(area).color;
 }
 
+// True when the area is 100% Actual for whatever the canvas is currently
+// showing: the active single task, or — in "All Tasks" view — every
+// applicable (non-N/A) task. Used by the "Only color unfinished" toggle.
+function isAreaDoneForCurrentView(area){
+  ensureAreaTasks(area);
+  if(STATE.currentTask === '__all__'){
+    const applicable = TASKS.filter(t => !area.tasks[t.key].na);
+    if(applicable.length === 0) return false;
+    return applicable.every(t => Number(area.tasks[t.key].percentActual) >= 100);
+  }
+  const td = area.tasks[STATE.currentTask];
+  if(!td || td.na) return false;
+  return Number(td.percentActual) >= 100;
+}
+
 /* Returns the fill-opacity multiplier for an area in the current view.
    N/A (the active trade is N/A, or aggregate-N/A across all trades) and
    Future (plan hasn't started yet) render fully transparent — outline only —
    so they don't visually compete with trades that have real progress to
    show. Compare-mode and color-by-task views keep their normal opacity. */
 function getAreaDisplayOpacity(area){
+  // While drawing a new polygon, every EXISTING area goes outline-only so
+  // the floor plan background is clear to trace against. Takes priority
+  // over every other mode below.
+  if(STATE.mode === 'draw') return 0;
+  // "Only color unfinished" overrides every other mode below: once an area
+  // hits 100% for the current view, it goes outline-only regardless of
+  // whether status color, color-by-task, or compare mode is active.
+  if(STATE.toggles.hideCompletedColor && isAreaDoneForCurrentView(area)) return 0;
   if(STATE.toggles.compareMode){
     // Same rule as the Dashboard table: only a genuinely N/A trade (not
     // applicable to this area) renders uncolored. "Not started" (0%) and
@@ -6141,6 +6434,10 @@ function renderCanvasOnly(){
     const groups = groupAreasByApartment(STATE.areas);
     groups.forEach((zones, aptId) => {
       const agg = makeAggregateArea(zones, aptId);
+      // Same full-hide rule as the per-zone loop below: an apartment whose
+      // aggregate is N/A for the currently viewed single trade is skipped
+      // entirely, not just faded.
+      if(STATE.currentTask !== '__all__' && agg.tasks[STATE.currentTask] && agg.tasks[STATE.currentTask].na) return;
       const color = getAreaDisplayColor(agg);
       aptLabels.push({agg, color});
     });
@@ -6148,9 +6445,18 @@ function renderCanvasOnly(){
 
   STATE.areas.forEach(area => {
     ensureAreaTasks(area);
+    const isSelected = area.id === STATE.selectedId;
+    // Fully hide areas that don't apply to the currently viewed single
+    // trade — not just faded outline-only, skip drawing them entirely, so
+    // browsing one trade only shows what's actually relevant to it. The
+    // selected area is exempt so picking it from the sidebar (e.g. to flip
+    // its N/A flag back off) still shows where it is on the floor plan.
+    if(!isSelected && STATE.currentTask !== '__all__'){
+      const curTd = area.tasks[STATE.currentTask];
+      if(curTd && curTd.na) return;
+    }
     const color = getAreaDisplayColor(area);
     const fillOp = getAreaDisplayOpacity(area);
-    const isSelected = area.id === STATE.selectedId;
 
     // POLYGON (fill = status color of this zone — never affected by grouping)
     const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
@@ -6188,14 +6494,16 @@ function renderCanvasOnly(){
 
     // LABEL (external) - white bg, black text.
     // When grouping is ON, we skip per-zone labels; apartment labels are
-    // rendered in a single pass after all polygons.
-    if(STATE.toggles.showLabel && !groupingActive){
+    // rendered in a single pass after all polygons. While actively drawing
+    // a new area, labels are skipped too — same declutter goal as the
+    // outline-only fill above.
+    if(STATE.toggles.showLabel && !groupingActive && STATE.mode !== 'draw'){
       renderExternalLabel(area, color);
     }
   });
 
   // Apartment-level labels — one per apartment.
-  if(aptLabels && STATE.toggles.showLabel){
+  if(aptLabels && STATE.toggles.showLabel && STATE.mode !== 'draw'){
     aptLabels.forEach(({agg, color}) => renderExternalLabel(agg, color));
   }
 
@@ -6284,6 +6592,13 @@ function renderExternalLabel(area, statusColor){
     if(td && td.na) return;
   }
 
+  // === "Only color unfinished" also hides fully-done labels (v46) ===
+  // Single-task view: the active task is done → nothing left to flag, skip.
+  // All-Tasks view: every applicable task is done → skip the whole label
+  // (per-task rows for a MIX of done/unfinished tasks are filtered further
+  // down instead, so only the unfinished ones get drawn).
+  if(STATE.toggles.hideCompletedColor && isAreaDoneForCurrentView(area)) return;
+
   // === DYNAMIC LABEL WIDTH (v44 iter 3) ===
   // Pre-build every visible string and MEASURE its width with the canvas
   // measurer so the box fits content exactly. The earlier char-ratio
@@ -6307,6 +6622,7 @@ function renderExternalLabel(area, statusColor){
     TASKS.forEach(taskDef => {
       const td = area.tasks[taskDef.key];
       if(td.na) return;
+      if(STATE.toggles.hideCompletedColor && (Number(td.percentActual)||0) >= 100) return;
       const ts = calcTaskStatus(td);
       const planPct = Math.round(calcPlanPercent(td));
       const actPct = Math.round(Number(td.percentActual)||0);
@@ -6463,6 +6779,8 @@ function renderExternalLabel(area, statusColor){
       const taskData = area.tasks[taskDef.key];
       // Skip N/A tasks entirely — no row drawn for them.
       if(taskData.na) return;
+      // Skip already-done tasks too when "Only color unfinished" is on.
+      if(STATE.toggles.hideCompletedColor && (Number(taskData.percentActual)||0) >= 100) return;
       const ts = calcTaskStatus(taskData);
       const planPct = Math.round(calcPlanPercent(taskData));
       const actPct = Math.round(Number(taskData.percentActual)||0);
@@ -6804,6 +7122,41 @@ function buildRevisionsHtml(td){
       html += `</div>`;
     }
   }
+
+  // Actual-data revisions (%Actual / Actual Start / Actual End) — recorded
+  // for every role's edits, but only Admin can see the trail and restore a
+  // previous value. Anyone else's mistakes stay invisible to them here;
+  // an Admin finds and fixes them via this box.
+  if(ROLE.isAdmin()){
+    const pctH = td.percentActualHistory || [];
+    const asH = td.actualStartHistory || [];
+    const aeH = td.actualEndHistory || [];
+    if(pctH.length || asH.length || aeH.length){
+      html += `<div class="rev-title" style="margin-top:8px">Actual revisions <span style="opacity:.6">(Admin only)</span></div>`;
+      if(pctH.length){
+        html += '<div class="rev-line"><span class="rev-lbl">%:</span> ';
+        html += pctH.map(v => `<s>${Math.round(Number(v)||0)}%</s>`).join(' → ');
+        html += ` → <b>${Math.round(Number(td.percentActual)||0)}%</b>`;
+        html += ` <button class="rev-clear" data-restore-field="percentActual" title="Restore the previous %">↺</button>`;
+        html += `</div>`;
+      }
+      if(asH.length){
+        html += '<div class="rev-line"><span class="rev-lbl">Actual start:</span> ';
+        html += asH.map(d => `<s>${fmtDate(d)}</s>`).join(' → ');
+        html += ` → <b>${fmtDate(td.actualStart)}</b>`;
+        html += ` <button class="rev-clear" data-restore-field="actualStart" title="Restore the previous Actual start">↺</button>`;
+        html += `</div>`;
+      }
+      if(aeH.length){
+        html += '<div class="rev-line"><span class="rev-lbl">Actual end:</span> ';
+        html += aeH.map(d => `<s>${fmtDate(d)}</s>`).join(' → ');
+        html += ` → <b>${fmtDate(td.actualEnd)}</b>`;
+        html += ` <button class="rev-clear" data-restore-field="actualEnd" title="Restore the previous Actual end">↺</button>`;
+        html += `</div>`;
+      }
+    }
+  }
+
   return html;
 }
 
@@ -7051,6 +7404,7 @@ function renderMobileDetailPanel(area){
         <span>Not applicable (N/A)</span>
         <div class="toggle ${td.na ? 'on' : ''}" data-mna="${focusKey}"></div>
       </div>
+      <div class="revisions-box">${buildRevisionsHtml(td)}</div>
     </div>
   `;
 
@@ -7074,6 +7428,8 @@ function wireMobileDetailInputs(area){
   const body = $('detailBody');
 
   body.querySelectorAll('input[data-mfield]').forEach(inp => {
+    inp.addEventListener('focus', () => { inp.dataset.prevValue = inp.value; });
+
     inp.addEventListener('input', () => {
       const tk = inp.dataset.tradeKey;
       const f  = inp.dataset.mfield;
@@ -7095,6 +7451,43 @@ function wireMobileDetailInputs(area){
         const st = calcTaskStatus(td);
         const pill = card.querySelector('.pill');
         if(pill){ pill.className = 'pill badge-' + st.status; pill.textContent = st.label.split(' ')[0]; }
+      }
+    });
+
+    inp.addEventListener('change', () => {
+      const tk = inp.dataset.tradeKey;
+      const f  = inp.dataset.mfield;
+      const td = area.tasks[tk];
+      if(!td) return;
+      const prev = inp.dataset.prevValue || '';
+      const now = inp.value;
+      let prevVal = prev, nowVal = now;
+      if(f === 'percentActual'){
+        prevVal = prev === '' ? 0 : Number(prev);
+        nowVal = now === '' ? 0 : Number(now);
+      }
+      if(prevVal !== nowVal){
+        recordActualFieldChange(area, tk, f, prevVal, nowVal);
+        const revBox = body.querySelector('.revisions-box');
+        if(revBox) revBox.innerHTML = buildRevisionsHtml(td);
+      }
+      inp.dataset.prevValue = now;
+    });
+  });
+
+  // Restore button inside the revisions box (Admin-only — the button only
+  // renders for Admin in the first place, see buildRevisionsHtml).
+  body.querySelectorAll('[data-restore-field]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const tk = STATE.detailTab;
+      const td = area.tasks[tk];
+      if(!td) return;
+      if(restorePreviousFieldValue(area, tk, btn.dataset.restoreField)){
+        renderMobileDetailPanel(area);
+        renderCanvasOnly();
+        renderStats();
+        updateTaskCounts();
+        refreshSidebarCardQuietly(area);
       }
     });
   });
@@ -7297,6 +7690,8 @@ function qeWireCards(){
 
   // % Actual input — type or paste
   body.querySelectorAll('input[data-qe-field="percentActual"]').forEach(inp => {
+    inp.addEventListener('focus', () => { inp.dataset.prevValue = inp.value; });
+
     inp.addEventListener('input', () => {
       const area = getArea(inp); if(!area) return;
       const td = area.tasks[trade.key]; if(!td) return;
@@ -7311,15 +7706,28 @@ function qeWireCards(){
       updateTaskCounts();
       refreshSidebarCardQuietly(area);
     });
+
+    inp.addEventListener('change', () => {
+      const area = getArea(inp); if(!area) return;
+      const td = area.tasks[trade.key]; if(!td) return;
+      const prev = inp.dataset.prevValue || '';
+      const now = inp.value;
+      const prevVal = prev === '' ? 0 : Number(prev);
+      const nowVal = now === '' ? 0 : Number(now);
+      if(prevVal !== nowVal) recordActualFieldChange(area, trade.key, 'percentActual', prevVal, nowVal);
+      inp.dataset.prevValue = now;
+    });
   });
 
-  // Quick % buttons (0/25/50/75/100) — single tap
+  // Quick % buttons (0/25/50/75/100) — single tap, always a full commit
   body.querySelectorAll('[data-qe-quick]').forEach(btn => {
     btn.addEventListener('click', () => {
       const area = getArea(btn); if(!area) return;
       const td = area.tasks[trade.key]; if(!td) return;
       const v = Number(btn.dataset.qeQuick);
+      const prevVal = Number(td.percentActual) || 0;
       td.percentActual = v;
+      if(prevVal !== v) recordActualFieldChange(area, trade.key, 'percentActual', prevVal, v);
       const card = btn.closest('.qe-card');
       refreshCardPill(card, td);
       refreshQuickButtons(card, v);
@@ -7337,7 +7745,11 @@ function qeWireCards(){
     inp.addEventListener('change', () => {
       const area = getArea(inp); if(!area) return;
       const td = area.tasks[trade.key]; if(!td) return;
-      td[inp.dataset.qeField] = inp.value;
+      const field = inp.dataset.qeField;
+      const prevVal = td[field] || '';
+      const nowVal = inp.value;
+      td[field] = nowVal;
+      if(prevVal !== nowVal) recordActualFieldChange(area, trade.key, field, prevVal, nowVal);
       const card = inp.closest('.qe-card');
       refreshCardPill(card, td);
       renderCanvasOnly();
@@ -7464,6 +7876,13 @@ function initQuickEntry(){
   if(btn) btn.addEventListener('click', qeOpen);
   const closeBtn = $('qeCloseBtn');
   if(closeBtn) closeBtn.addEventListener('click', qeClose);
+  const undoBtn = $('qeUndoBtn');
+  if(undoBtn) undoBtn.addEventListener('click', () => {
+    undoLastFieldChange();
+    // undoLastFieldChange() already calls the main render(); refresh the
+    // Quick Entry overlay too since it's a separate render cycle.
+    if(QE.open) renderQuickEntry();
+  });
   const fc = $('qeFloorChip');     if(fc) fc.addEventListener('click', () => qeOpenPicker('floor'));
   const uc = $('qeUnitChip');      if(uc) uc.addEventListener('click', () => qeOpenPicker('unit'));
   const tc = $('qeTradeChip');     if(tc) tc.addEventListener('click', () => qeOpenPicker('trade'));
@@ -7703,6 +8122,18 @@ function wireDetailInputs(area){
         const rev = $('detailRevisions');
         if(rev) rev.innerHTML = buildRevisionsHtml(td);
       }
+      if(f === 'percentActual' || f === 'actualStart' || f === 'actualEnd'){
+        let prevVal = prev, nowVal = now;
+        if(f === 'percentActual'){
+          prevVal = prev === '' ? 0 : Number(prev);
+          nowVal = now === '' ? 0 : Number(now);
+        }
+        if(prevVal !== nowVal){
+          recordActualFieldChange(area, STATE.detailTab, f, prevVal, nowVal);
+          const rev = $('detailRevisions');
+          if(rev) rev.innerHTML = buildRevisionsHtml(td);
+        }
+      }
       inp.dataset.prev = now;
       if(histKey) renderCanvasOnly();
     });
@@ -7723,6 +8154,20 @@ function wireDetailInputs(area){
       td[histKey] = [];
       renderDetailPanel();
       renderCanvasOnly();
+    });
+  });
+
+  // Actual-field restore button (Admin only — button only renders for Admin)
+  body.querySelectorAll('[data-restore-field]').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      if(restorePreviousFieldValue(area, STATE.detailTab, btn.dataset.restoreField)){
+        renderDetailPanel();
+        renderCanvasOnly();
+        renderStats();
+        updateTaskCounts();
+        refreshSidebarCardQuietly(area);
+      }
     });
   });
 }
@@ -9398,7 +9843,7 @@ function applyRolePermissions(){
     'cloudPushBtn',     // Manual cloud push (overwrites cloud)
     'reloadCloudBtn',   // Force reload from cloud
     'addFloorBtn', 'renameFloorBtn', 'dupFloorBtn', 'delFloorBtn',
-    'copyAreasBtn', 'cleanupFloorsBtn', 'resetHistoryBtn',
+    'copyAreasBtn', 'copyTradeNABtn', 'cleanupFloorsBtn', 'resetHistoryBtn',
     'dashExcelBtn',     // Dashboard Excel export
     'dashPdfBtn',       // Dashboard PDF report
   ];
