@@ -2030,7 +2030,7 @@
       <button class="floor-btn wide" id="cleanupFloorsBtn" style="margin-top:6px;border-color:#ef4444;color:#ef4444">🧹 Cleanup empty floors</button>
       <button class="floor-btn wide" id="resetHistoryBtn" style="margin-top:6px;border-color:#ef4444;color:#ef4444">🗑 Reset plan history</button>
       <button class="floor-btn wide" id="reloadCloudBtn" style="margin-top:6px;border-color:#3b82f6;color:#3b82f6">🔄 Force reload from cloud</button>
-      <div class="hint" style="margin-top:6px">Each floor keeps its own progress &amp; plan image. After "+ Add", use <b>Load Plan</b> (top bar) to upload an image or PDF for that floor. "Copy areas" copies only shapes (names &amp; outlines), not dates/%. "Copy N/A" only updates the currently-viewed trade's applicable/N/A flag on areas that already exist on other floors (matched by name) — no shapes, no other trades, no progress data touched.</div>
+      <div class="hint" style="margin-top:6px">Each floor keeps its own progress &amp; plan image. After "+ Add", use <b>Load Plan</b> (top bar) to upload an image or PDF for that floor. "Copy areas" copies only shapes (names &amp; outlines), not dates/%. "Copy N/A" updates the currently-viewed trade's applicable/N/A flag on matching areas (by name); if an area doesn't exist yet on a target floor, it's created there (name translated to that floor's number) with progress left blank.</div>
     </div>
 
     <!-- TASK SELECTOR -->
@@ -4589,10 +4589,34 @@ function areaMatchKey(name){
   return up;
 }
 
-// Copies ONLY the currently-viewed trade's N/A (applicable/not) flag from
-// this floor's areas onto EXISTING areas with a matching name on other
-// floors. Does not touch shapes, other trades, or any progress data (dates,
-// %, actual). Areas with no name match on a target floor are left alone.
+// Extracts the floor's number from its display name ("6F" -> 6, "10F" -> 10).
+function extractFloorNumber(floorName){
+  const m = String(floorName||'').match(/(\d+)/);
+  return m ? parseInt(m[1], 10) : null;
+}
+
+// Renames an area for a different floor by swapping just the floor-number
+// digits right after the zone letter — "A05.KITCHEN" -> "A06.KITCHEN" for
+// floor 6, preserving the source's zero-padding width (05 -> 2 digits, so
+// floor 6 becomes "06" not "6"). Names that don't match the zone-letter +
+// digits pattern (no reliable floor-number spot to swap) are returned as-is.
+function translateAreaNameToFloor(name, targetFloorNum){
+  const m = name.match(/^([AB])(\d+)(.*)$/i);
+  if(!m || targetFloorNum === null) return name;
+  const width = m[2].length;
+  const targetStr = String(targetFloorNum).padStart(width, '0');
+  return m[1] + targetStr + m[3];
+}
+
+// Copies the currently-viewed trade's N/A (applicable/not) flag from this
+// floor's areas to other floors, matched by name (floor number ignored).
+// - If a matching area already exists on the target floor, only its N/A
+//   flag for this trade is updated — shape, other trades, and progress data
+//   (dates/%/actual) are left untouched.
+// - If no match exists, the area is CREATED on the target floor: same shape
+//   as the source, name translated to that floor's number, all trades' N/A
+//   flags copied from source (via makeBlankAreaFrom) — progress data starts
+//   blank, same as the manual Duplicate feature.
 function copyTradeNAToFloors(){
   if(STATE.currentTask === '__all__'){
     alert('Pick a specific trade first (not "All Tasks") — this copies the N/A flag for whichever trade is currently selected.');
@@ -4607,7 +4631,7 @@ function copyTradeNAToFloors(){
 
   const list = targets.map((f, i) => `${i+1}. ${f.name}`).join('\n');
   const ans = prompt(
-    `Copy "${trade.name}" N/A status from "${src.name}" to which floors? (matched by area name, floor number ignored)\n\n${list}\n\nEnter numbers separated by commas (e.g. 1,2,3), or "all":`,
+    `Copy "${trade.name}" status from "${src.name}" to which floors? Areas matched by name get their N/A flag updated; areas that don't exist yet on a target floor are created there (name translated to that floor's number).\n\n${list}\n\nEnter numbers separated by commas (e.g. 1,2,3), or "all":`,
     'all'
   );
   if(ans === null) return;
@@ -4621,30 +4645,37 @@ function copyTradeNAToFloors(){
   }
   if(chosen.length === 0){ alert('No valid floors selected.'); return; }
 
-  // Build the source's key -> na map for this trade only.
-  const srcMap = new Map();
-  src.areas.forEach(a => {
-    ensureAreaTasks(a);
-    const td = a.tasks[STATE.currentTask];
-    if(td) srcMap.set(areaMatchKey(a.name), !!td.na);
-  });
+  src.areas.forEach(a => ensureAreaTasks(a));
 
-  let updated = 0, unmatched = 0;
+  let updated = 0, created = 0, skipped = 0;
   chosen.forEach(tf => {
-    (tf.areas||[]).forEach(a => {
+    const tfNum = extractFloorNumber(tf.name);
+    if(!tf.areas) tf.areas = [];
+    src.areas.forEach(a => {
+      const srcTd = a.tasks[STATE.currentTask];
+      if(!srcTd) return;
       const key = areaMatchKey(a.name);
-      if(srcMap.has(key)){
-        ensureAreaTasks(a);
-        const td = a.tasks[STATE.currentTask];
-        if(td){ td.na = srcMap.get(key); updated++; }
+      const existing = tf.areas.find(x => areaMatchKey(x.name) === key);
+      if(existing){
+        ensureAreaTasks(existing);
+        const td = existing.tasks[STATE.currentTask];
+        if(td){ td.na = !!srcTd.na; updated++; }
+      } else if(tfNum !== null){
+        const copy = makeBlankAreaFrom(a);
+        copy.name = translateAreaNameToFloor(a.name, tfNum);
+        tf.areas.push(copy);
+        created++;
       } else {
-        unmatched++;
+        skipped++;
       }
     });
   });
 
   render();
-  alert(`Updated "${trade.name}" N/A status on ${updated} matching area(s) across ${chosen.length} floor(s).\n${unmatched} area(s) had no matching name and were left unchanged.`);
+  alert(
+    `"${trade.name}": updated ${updated} existing area(s), created ${created} new area(s) across ${chosen.length} floor(s).` +
+    (skipped ? `\n${skipped} area(s) skipped — couldn't read a floor number from the target floor's name.` : '')
+  );
 }
 
 function copyAreasToFloors(){
